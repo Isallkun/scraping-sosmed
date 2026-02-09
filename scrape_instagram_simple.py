@@ -181,6 +181,57 @@ def _parse_count(text):
         return 0
 
 
+def is_pinned_post(driver, link_element):
+    """
+    Check if a post link is a pinned post on the Instagram profile grid.
+
+    Instagram shows a small pin/bookmark SVG icon overlay on pinned posts.
+    Walks up from the link element to find the grid cell container (stops
+    when ancestor contains more than one post link), then checks for pinned
+    SVG within that scoped container only.
+
+    Args:
+        driver: Selenium WebDriver instance
+        link_element: Selenium WebElement for the post link (<a> tag)
+
+    Returns:
+        bool: True if the post appears to be pinned
+    """
+    try:
+        result = driver.execute_script("""
+            const link = arguments[0];
+            const pinnedSelector =
+                'svg[aria-label*="Pinned"], svg[aria-label*="pinned"], ' +
+                'svg[aria-label*="Disematkan"], svg[aria-label*="disematkan"]';
+
+            // Walk up from the link to find the grid cell container.
+            // Stop when the ancestor contains more than one post/reel link,
+            // which means we've moved past the single grid cell into the row.
+            let container = link;
+            let lastSingleLinkContainer = link;
+
+            for (let i = 0; i < 10; i++) {
+                if (!container.parentElement) break;
+                container = container.parentElement;
+
+                const postLinks = container.querySelectorAll(
+                    'a[href*="/p/"], a[href*="/reel/"]'
+                );
+                if (postLinks.length > 1) break;  // Gone past single cell
+
+                // This ancestor still belongs to our single grid cell
+                lastSingleLinkContainer = container;
+            }
+
+            // Check for pinned SVG only within this scoped container
+            return !!lastSingleLinkContainer.querySelector(pinnedSelector);
+        """, link_element)
+        return bool(result)
+    except Exception:
+        pass
+    return False
+
+
 def extract_post_data_from_page(driver):
     """Extract post data (content, likes, comment count) from an Instagram post page.
 
@@ -303,6 +354,10 @@ def extract_post_data_from_page(driver):
 
     return result
 
+COOKIE_DIR = Path(__file__).parent / "cookies"
+COOKIE_FILE = COOKIE_DIR / "instagram_cookies.json"
+
+
 def setup_driver(headless=False):
     """Setup Chrome driver"""
     options = Options()
@@ -311,25 +366,134 @@ def setup_driver(headless=False):
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument(f'user-agent={AntiDetection.get_random_user_agent()}')
-    
+
     driver = webdriver.Chrome(options=options)
     driver.set_window_size(*AntiDetection.get_random_viewport())
     return driver
 
+
+def save_cookies(driver, username):
+    """Save browser cookies to file after successful login."""
+    COOKIE_DIR.mkdir(exist_ok=True)
+    cookies = driver.get_cookies()
+    data = {
+        'username': username,
+        'saved_at': datetime.now().isoformat(),
+        'cookies': cookies,
+    }
+    with open(COOKIE_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    print(f"  🍪 Cookies saved ({len(cookies)} cookies)")
+
+
+def load_cookies(driver, username):
+    """
+    Load cookies from file and verify the session is still valid.
+
+    Returns True if cookies were loaded and the session is active.
+    """
+    if not COOKIE_FILE.exists():
+        return False
+
+    try:
+        with open(COOKIE_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        # Check username matches
+        if data.get('username') != username:
+            print("  🍪 Cookie file is for a different user, skipping")
+            return False
+
+        cookies = data.get('cookies', [])
+        if not cookies:
+            return False
+
+        # Navigate to Instagram first (cookies need matching domain)
+        driver.get("https://www.instagram.com/")
+        time.sleep(2)
+
+        # Inject cookies
+        for cookie in cookies:
+            # Selenium doesn't accept 'expiry' as float, and some fields
+            # may cause issues, so clean up
+            clean = {k: v for k, v in cookie.items()
+                     if k in ('name', 'value', 'domain', 'path', 'secure', 'httpOnly')}
+            if 'expiry' in cookie:
+                clean['expiry'] = int(cookie['expiry'])
+            try:
+                driver.add_cookie(clean)
+            except Exception:
+                continue
+
+        # Reload page with cookies applied
+        driver.get("https://www.instagram.com/")
+        time.sleep(3)
+
+        # Check if we're logged in by looking for profile/home indicators
+        logged_in = driver.execute_script("""
+            // If there's a profile link or navigation with user-specific content
+            // and we're NOT on the login page, we're logged in
+            if (window.location.href.includes('/accounts/login')) return false;
+            const profileLink = document.querySelector('a[href*="/direct/"]') ||
+                                document.querySelector('svg[aria-label="Home"]') ||
+                                document.querySelector('a[href="/direct/inbox/"]') ||
+                                document.querySelector('span[aria-label="Profile"]');
+            return !!profileLink;
+        """)
+
+        if logged_in:
+            return True
+
+        # Extra check: look for logged-in nav elements
+        try:
+            driver.find_element(By.CSS_SELECTOR, 'svg[aria-label="Home"]')
+            return True
+        except Exception:
+            pass
+
+        # Check URL - if not redirected to login, likely logged in
+        if '/accounts/login' not in driver.current_url:
+            return True
+
+        return False
+
+    except Exception as e:
+        print(f"  🍪 Error loading cookies: {e}")
+        return False
+
+
 def login_instagram(driver, username, password):
-    """Login to Instagram - simplified"""
+    """
+    Login to Instagram with cookie support.
+
+    Flow:
+    1. Try loading saved cookies (fast, no password needed)
+    2. If cookies invalid/missing, do full username+password login
+    3. Save cookies after successful password login
+    """
+    # ── Try cookie login first ───────────────────────────────────────
     print("🔐 Logging in to Instagram...")
-    
+    if COOKIE_FILE.exists():
+        print("  🍪 Found saved cookies, trying cookie login...")
+        if load_cookies(driver, username):
+            print("  🍪 Cookie login successful! (no password needed)")
+            return True
+        else:
+            print("  🍪 Cookies expired or invalid, falling back to password login")
+
+    # ── Full password login ──────────────────────────────────────────
+    print("  🔑 Logging in with username + password...")
+
     driver.get("https://www.instagram.com/accounts/login/")
     time.sleep(3)
-    
+
     # Find and fill username
     selectors = [
         'input[name="username"]',
         'input[aria-label*="username"]',
         'input[type="text"]'
     ]
-    
+
     username_input = None
     for selector in selectors:
         try:
@@ -339,24 +503,24 @@ def login_instagram(driver, username, password):
             break
         except:
             continue
-    
+
     if not username_input:
         raise Exception("Could not find username input")
-    
+
     # Type username
     for char in username:
         username_input.send_keys(char)
         time.sleep(0.1)
-    
+
     time.sleep(1)
-    
+
     # Find and fill password
     password_selectors = [
         'input[name="password"]',
         'input[type="password"]',
         'input[aria-label*="Password"]'
     ]
-    
+
     password_input = None
     for selector in password_selectors:
         try:
@@ -364,26 +528,25 @@ def login_instagram(driver, username, password):
             break
         except:
             continue
-    
+
     if not password_input:
         raise Exception("Could not find password input")
-    
+
     for char in password:
         password_input.send_keys(char)
         time.sleep(0.1)
-    
+
     time.sleep(1)
-    
+
     # Click login - try multiple methods
     try:
-        # Method 1: Find button
         login_selectors = [
             'button[type="submit"]',
             'button:contains("Log in")',
             '//button[contains(text(), "Log in")]',
             '//button[@type="submit"]'
         ]
-        
+
         login_button = None
         for selector in login_selectors:
             try:
@@ -394,189 +557,245 @@ def login_instagram(driver, username, password):
                 break
             except:
                 continue
-        
+
         if login_button:
             login_button.click()
         else:
-            # Method 2: Press Enter on password field
             from selenium.webdriver.common.keys import Keys
             password_input.send_keys(Keys.RETURN)
-    except Exception as e:
-        # Method 3: Press Enter as fallback
+    except Exception:
         from selenium.webdriver.common.keys import Keys
         password_input.send_keys(Keys.RETURN)
-    
-    print("⏳ Waiting for login...")
+
+    print("  ⏳ Waiting for login...")
     time.sleep(5)
-    
-    # Handle popups
-    try:
-        not_now = WebDriverWait(driver, 3).until(
-            EC.element_to_be_clickable((By.XPATH, '//button[contains(text(), "Not")]'))
-        )
-        not_now.click()
-        time.sleep(1)
-    except:
-        pass
-    
-    try:
-        not_now = WebDriverWait(driver, 3).until(
-            EC.element_to_be_clickable((By.XPATH, '//button[contains(text(), "Not")]'))
-        )
-        not_now.click()
-        time.sleep(1)
-    except:
-        pass
-    
-    print("✓ Login successful!")
+
+    # Handle popups ("Save Login Info?", "Turn on Notifications?")
+    for _ in range(2):
+        try:
+            not_now = WebDriverWait(driver, 3).until(
+                EC.element_to_be_clickable((By.XPATH, '//button[contains(text(), "Not")]'))
+            )
+            not_now.click()
+            time.sleep(1)
+        except:
+            pass
+
+    # Verify login succeeded
+    if '/accounts/login' in driver.current_url:
+        raise Exception("Login failed - still on login page. Check credentials.")
+
+    # Save cookies for next time
+    save_cookies(driver, username)
+
+    print("  ✓ Password login successful!")
     return True
 
-def scrape_comments_from_post_dom(driver, post_url, post_type='post'):
+def scrape_comments_from_post_dom(driver, post_url, post_type='post', limit=20):
     """
-    Strategy 2: DOM-based comment extraction with WebDriverWait
-    
-    This strategy uses Selenium's WebDriverWait to ensure the comment section
-    has fully rendered before attempting extraction. It handles Instagram's
-    lazy-loading by clicking "View all comments" and "Load more" buttons,
-    then scrolling within the comment container to trigger additional loads.
-    
-    The strategy supports both English and Indonesian UI text, making it
-    suitable for international Instagram profiles.
-    
+    Strategy 2: DOM-based comment extraction with scrolling and JS extraction.
+
+    Uses Selenium to scroll/click the page to load comments, then extracts
+    using JavaScript for reliability against Instagram's dynamic DOM.
+
     Args:
-        driver: Selenium WebDriver instance with an active Instagram session
+        driver: Selenium WebDriver instance
         post_url: Full URL of the Instagram post or reel
-        post_type: Either 'post' or 'reel', used for logging context
-    
+        post_type: Either 'post' or 'reel'
+        limit: Maximum number of comments to extract
+
     Returns:
-        list: Array of comment objects, each containing:
-            - author (str): Username of the commenter
-            - text (str): The comment text content
-            - timestamp (str): ISO 8601 timestamp or current time if unavailable
-    
-    Validates: Requirements 14.1, 14.2, 14.3, 14.4, 14.5
+        list: Array of comment dicts with author, text, timestamp
     """
     comments = []
-    
+
     try:
-        # Wait for comment section to render (Requirement 14.1)
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.TAG_NAME, 'ul'))
-        )
-        time.sleep(2)  # Additional wait for dynamic content
-        
-        # Try to click "View all comments" button (Requirement 14.2)
-        # Support both English and Indonesian
+        # Wait for the article element to be present
+        try:
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.TAG_NAME, 'article'))
+            )
+        except TimeoutException:
+            pass
+        time.sleep(3)
+
+        # Scroll down to trigger comment section rendering
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight * 0.5);")
+        time.sleep(2)
+
+        # Try to click "View all N comments" link
         view_all_selectors = [
+            "//a[contains(text(), 'View all')]",
             "//span[contains(text(), 'View all')]",
+            "//a[contains(text(), 'Lihat semua')]",
             "//span[contains(text(), 'Lihat semua')]",
             "//button[contains(., 'View all')]",
-            "//button[contains(., 'Lihat semua')]"
+            "//button[contains(., 'Lihat semua')]",
         ]
-        
+
         for selector in view_all_selectors:
             try:
                 view_all_btn = driver.find_element(By.XPATH, selector)
                 driver.execute_script("arguments[0].click();", view_all_btn)
-                print(f"  ✓ Clicked 'View all comments' button")
-                time.sleep(2)
+                print(f"  ✓ Clicked 'View all comments'")
+                time.sleep(4)
                 break
-            except:
+            except Exception:
                 continue
-        
-        # Scroll and load more comments (Requirement 14.3)
-        # Up to 5 times
-        for i in range(5):
-            try:
-                # Find comment container
-                comment_container = driver.find_element(By.CSS_SELECTOR, 'ul')
-                
-                # Scroll within container using JavaScript
-                driver.execute_script(
-                    "arguments[0].scrollTop = arguments[0].scrollHeight",
-                    comment_container
-                )
-                time.sleep(1)
-                
-                # Try to click "Load more" button
-                load_more_selectors = [
-                    "//button[contains(., 'Load more')]",
-                    "//button[contains(., 'Muat lebih banyak')]",
-                    "//span[contains(text(), 'Load more')]"
-                ]
-                
-                for selector in load_more_selectors:
-                    try:
-                        load_more = driver.find_element(By.XPATH, selector)
-                        driver.execute_script("arguments[0].click();", load_more)
-                        print(f"  ✓ Clicked 'Load more' (attempt {i+1})")
-                        time.sleep(2)
-                        break
-                    except:
-                        continue
-                        
-            except Exception as e:
-                break  # No more comments to load
-        
-        # Extract comment elements (Requirement 14.4)
-        comment_elements = driver.find_elements(By.CSS_SELECTOR, 'ul li')
-        
-        seen_texts = set()  # Track duplicates
-        
-        for elem in comment_elements:
-            try:
-                # Extract author from link (Requirement 14.4)
-                author_elem = elem.find_element(By.CSS_SELECTOR, 'a[href^="/"]')
-                author = author_elem.get_attribute('href').strip('/').split('/')[0]
-                
-                # Extract comment text from span with dir="auto" (Requirement 14.4)
-                text_elem = elem.find_element(By.CSS_SELECTOR, 'span[dir="auto"]')
-                text = text_elem.text.strip()
-                
-                # Filter out invalid comments (Requirement 14.5)
-                # Skip if text is empty or too short
-                if not text or len(text) < 2:
-                    continue
-                
-                # Skip duplicates
-                if text in seen_texts:
-                    continue
-                
-                # Skip captions and UI text (Requirement 14.5)
-                ui_text_keywords = [
-                    'Original audio', 'Suara asli', 'Reply', 'Balas',
-                    'View replies', 'Lihat balasan', 'Liked by', 'Disukai oleh',
-                    'See translation', 'Lihat terjemahan'
-                ]
-                if any(keyword in text for keyword in ui_text_keywords):
-                    continue
-                
-                # Skip if text looks like a timestamp (e.g., "1h", "2d")
-                if re.match(r'^\d+[hdwmy]$', text):
-                    continue
-                
-                seen_texts.add(text)
-                
-                # Extract timestamp if available (Requirement 14.4)
-                timestamp = None
+
+        # Scroll to load more comments (up to 8 iterations)
+        max_scroll = min(8, max(3, limit // 5))
+        for i in range(max_scroll):
+            driver.execute_script("window.scrollBy(0, 600);")
+            time.sleep(2)
+
+            # Try clicking "Load more" type buttons
+            for sel in [
+                "//button[contains(., 'Load more')]",
+                "//button[contains(., 'Muat lebih')]",
+                "//button[contains(@aria-label, 'Load more')]",
+            ]:
                 try:
-                    time_elem = elem.find_element(By.TAG_NAME, 'time')
-                    timestamp = time_elem.get_attribute('datetime')
-                except:
-                    pass
-                
-                comment_obj = {
-                    'author': author,
-                    'text': text,
-                    'timestamp': timestamp or datetime.now().isoformat() + 'Z'
+                    btn = driver.find_element(By.XPATH, sel)
+                    if btn.is_displayed():
+                        driver.execute_script("arguments[0].click();", btn)
+                        print(f"  ✓ Load more comments (iter {i+1})")
+                        time.sleep(3)
+                        break
+                except Exception:
+                    continue
+
+        time.sleep(2)
+
+        # Extract comments via JS targeting Instagram 2026 DOM structure
+        # Instagram uses span.xjp7ctv > div > a._a6hd for comment usernames
+        js_extract = """
+        const results = [];
+        const maxResults = arguments[0];
+        const seenTexts = new Set();
+
+        const uiTexts = new Set([
+            'reply', 'balas', 'follow', 'ikuti', 'verified', 'likes', 'suka',
+            'see translation', 'lihat terjemahan', 'view replies', 'lihat balasan',
+            'liked by', 'disukai oleh', 'send', 'kirim', 'and', 'others', 'more',
+            'original audio', 'suara asli'
+        ]);
+
+        function isUiText(t) {
+            const lower = t.toLowerCase();
+            if (uiTexts.has(lower)) return true;
+            if (/^\\d+[hdwmy]$/.test(t)) return true;
+            if (/^\\d+\\s*(hours?|minutes?|days?|weeks?|months?|years?)\\s*ago$/i.test(t)) return true;
+            if (/^[\\d,.]+\\s*(likes?|suka)?$/i.test(t)) return true;
+            if (/^\\d+\\s+others?$/i.test(t)) return true;
+            if (/^\\d+\\s+comments?\\s+from\\s+/i.test(t)) return true;
+            return false;
+        }
+
+        // Instagram 2026: usernames in comments are wrapped in span.xjp7ctv
+        const userSpans = document.querySelectorAll('span.xjp7ctv');
+        let isFirst = true;
+
+        for (const userSpan of userSpans) {
+            if (results.length >= maxResults) break;
+
+            try {
+                const link = userSpan.querySelector('a[href^="/"]');
+                if (!link) continue;
+                const href = link.getAttribute('href') || '';
+                const username = href.replace(/^\\//, '').split('/')[0];
+                if (!username || username.length < 2) continue;
+
+                // Skip the first one - it's the post caption
+                if (isFirst) { isFirst = false; continue; }
+
+                // Walk up to find the comment block container
+                let container = userSpan;
+                for (let i = 0; i < 8; i++) {
+                    if (!container.parentElement) break;
+                    container = container.parentElement;
+                    // Stop when we find a container with time or Reply text
+                    if (container.querySelector('time') ||
+                        container.textContent.includes('Reply') ||
+                        container.textContent.includes('Balas')) break;
                 }
-                
-                comments.append(comment_obj)
-                
-            except Exception as e:
-                continue  # Skip malformed comments
-        
-        print(f"  ✓ Extracted {len(comments)} comments via DOM")
+
+                // Find comment text in span[dir="auto"] within container
+                const spans = container.querySelectorAll('span[dir="auto"]');
+                let commentText = '';
+                for (const span of spans) {
+                    const t = span.textContent.trim();
+                    if (!t || t.length < 1) continue;
+                    if (t.toLowerCase() === username.toLowerCase()) continue;
+                    if (isUiText(t)) continue;
+                    if (t.length > commentText.length) commentText = t;
+                }
+
+                if (!commentText || seenTexts.has(commentText)) continue;
+                // Skip captions: text starts with username (e.g. "user 1dCaption...")
+                if (commentText.toLowerCase().startsWith(username.toLowerCase())) continue;
+                seenTexts.add(commentText);
+
+                const timeEl = container.querySelector('time');
+                results.push({
+                    author: username,
+                    text: commentText,
+                    timestamp: timeEl ? timeEl.getAttribute('datetime') : new Date().toISOString()
+                });
+            } catch(e) { continue; }
+        }
+
+        // Fallback: scan all notranslate links (another pattern for usernames)
+        if (results.length === 0) {
+            const links = document.querySelectorAll('a.notranslate[href^="/"], a._a6hd[href^="/"]');
+            let skipFirst = true;
+            for (const link of links) {
+                if (results.length >= maxResults) break;
+                try {
+                    const href = link.getAttribute('href') || '';
+                    const name = href.replace(/^\\//, '').split('/')[0];
+                    if (!name || name.length < 2) continue;
+                    if (href.includes('/explore/') || href.includes('/p/') ||
+                        href.includes('/reel/') || href.includes('/direct/') ||
+                        href.includes('/accounts/') || href.includes('/stories/') ||
+                        href.includes('/web/') || href.includes('/legal/') ||
+                        href.includes('/about/') || href.includes('/privacy/')) continue;
+                    if (skipFirst) { skipFirst = false; continue; }
+
+                    let container = link;
+                    for (let i = 0; i < 8; i++) {
+                        if (!container.parentElement) break;
+                        container = container.parentElement;
+                        if (container.querySelector('time')) break;
+                    }
+
+                    const spans = container.querySelectorAll('span[dir="auto"]');
+                    let commentText = '';
+                    for (const s of spans) {
+                        const t = s.textContent.trim();
+                        if (!t || t.length < 1) continue;
+                        if (t.toLowerCase() === name.toLowerCase()) continue;
+                        if (isUiText(t)) continue;
+                        if (t.length > commentText.length) commentText = t;
+                    }
+                    if (!commentText || seenTexts.has(commentText)) continue;
+                    if (commentText.toLowerCase().startsWith(name.toLowerCase())) continue;
+                    seenTexts.add(commentText);
+                    const timeEl = container.querySelector('time');
+                    results.push({
+                        author: name,
+                        text: commentText,
+                        timestamp: timeEl ? timeEl.getAttribute('datetime') : new Date().toISOString()
+                    });
+                } catch(e) { continue; }
+            }
+        }
+
+        return results;
+        """
+
+        comments = driver.execute_script(js_extract, limit) or []
+        print(f"  ✓ Extracted {len(comments)} comments via DOM+JS")
         
     except Exception as e:
         print(f"  ✗ DOM extraction failed: {str(e)}")
@@ -584,97 +803,143 @@ def scrape_comments_from_post_dom(driver, post_url, post_type='post'):
     return comments
 
 
-def scrape_comments_from_post_js(driver, post_url, post_type='post'):
+def scrape_comments_from_post_js(driver, post_url, post_type='post', limit=20):
     """
     Strategy 3: JavaScript-based DOM query fallback
-    
+
     This strategy executes JavaScript directly in the browser context to query
     the DOM. It's more resilient than Selenium selectors because it runs in the
     same context as Instagram's own JavaScript, allowing it to access elements
     that may be dynamically created or hidden from Selenium's view.
-    
-    This is the final fallback strategy when both JSON parsing and DOM extraction
-    fail. It uses the same filtering logic as Strategy 2 but implemented in
-    JavaScript for better compatibility.
-    
+
     Args:
         driver: Selenium WebDriver instance with an active Instagram session
-        post_url: Full URL of the Instagram post or reel (not used but kept for consistency)
+        post_url: Full URL of the Instagram post or reel
         post_type: Either 'post' or 'reel', used for logging context
-    
+        limit: Maximum number of comments to extract
+
     Returns:
-        list: Array of comment objects, each containing:
-            - author (str): Username of the commenter
-            - text (str): The comment text content
-            - timestamp (str): ISO 8601 timestamp or current time if unavailable
-    
+        list: Array of comment objects
+
     Validates: Requirement 14.6
     """
     comments = []
-    
+
     try:
-        # JavaScript to extract comments directly from DOM
+        # Sequential span scan: walk through all span[dir=auto] looking
+        # for username->text patterns (Instagram 2026 flat DOM)
         js_script = """
-        const comments = [];
-        const commentElements = document.querySelectorAll('ul li');
+        const maxComments = arguments[0];
+        const results = [];
         const seenTexts = new Set();
-        
-        // UI text keywords to filter out
-        const uiKeywords = [
-            'Original audio', 'Suara asli', 'Reply', 'Balas',
-            'View replies', 'Lihat balasan', 'Liked by', 'Disukai oleh',
-            'See translation', 'Lihat terjemahan'
-        ];
-        
-        commentElements.forEach(elem => {
-            try {
-                const authorLink = elem.querySelector('a[href^="/"]');
-                const textSpan = elem.querySelector('span[dir="auto"]');
-                const timeElem = elem.querySelector('time');
-                
-                if (authorLink && textSpan) {
-                    const author = authorLink.getAttribute('href').replace(/^\//, '').split('/')[0];
-                    const text = textSpan.textContent.trim();
-                    const timestamp = timeElem ? timeElem.getAttribute('datetime') : null;
-                    
-                    // Filter out invalid/empty comments
-                    if (!text || text.length < 2) {
-                        return;
-                    }
-                    
-                    // Skip duplicates
-                    if (seenTexts.has(text)) {
-                        return;
-                    }
-                    
-                    // Skip UI text
-                    const hasUIKeyword = uiKeywords.some(keyword => text.includes(keyword));
-                    if (hasUIKeyword) {
-                        return;
-                    }
-                    
-                    // Skip timestamp-like text (e.g., "1h", "2d")
-                    if (/^\d+[hdwmy]$/.test(text)) {
-                        return;
-                    }
-                    
-                    seenTexts.add(text);
-                    
-                    comments.push({
-                        author: author,
-                        text: text,
-                        timestamp: timestamp || new Date().toISOString()
-                    });
+
+        const uiTexts = new Set([
+            'reply', 'balas', 'follow', 'ikuti', 'verified', 'likes', 'suka',
+            'see translation', 'lihat terjemahan', 'view replies', 'lihat balasan',
+            'liked by', 'disukai oleh', 'send', 'kirim', 'and', 'others',
+            'original audio', 'suara asli', 'home', 'reels', 'messages',
+            'search', 'explore', 'notifications', 'create', 'profile', 'more',
+            'also from meta', 'meta', 'about', 'blog', 'jobs', 'help',
+            'privacy', 'terms', 'locations', 'language', 'threads'
+        ]);
+
+        function isUi(t) {
+            const lower = t.toLowerCase();
+            if (uiTexts.has(lower)) return true;
+            if (/^\\d+[hdwmy]$/.test(t)) return true;
+            if (/^\\d+\\s*(hours?|min|minutes?|days?|weeks?|months?|years?)\\s*(ago)?$/i.test(t)) return true;
+            if (/^[\\d,.]+\\s*(likes?|suka)?$/i.test(t)) return true;
+            if (/^\\d+\\s+others?$/i.test(t)) return true;
+            if (/^\\d+\\s+comments?\\s+from/i.test(t)) return true;
+            if (/^\\d+\\s+(day|hour|week|month|year)/i.test(t)) return true;
+            return false;
+        }
+
+        // Get all spans in document order
+        const allSpans = document.querySelectorAll('span[dir="auto"]');
+        const spanList = Array.from(allSpans);
+
+        // Scan sequentially: find username spans then look ahead for comment text
+        let i = 0;
+        let captionSkipped = false;
+
+        while (i < spanList.length && results.length < maxComments) {
+            const span = spanList[i];
+            const text = span.textContent.trim();
+            i++;
+
+            // Check if this span IS a username (has a parent link to a profile)
+            const parentLink = span.closest('a[href^="/"]');
+            if (!parentLink) continue;
+
+            const href = parentLink.getAttribute('href') || '';
+            // Must be a simple profile link like /username/
+            if (href.includes('/explore/') || href.includes('/p/') ||
+                href.includes('/reel/') || href.includes('/accounts/') ||
+                href.includes('/stories/') || href.includes('/direct/') ||
+                href.includes('/web/') || href.includes('/legal/') ||
+                href.includes('/about/') || href.includes('/privacy/')) continue;
+
+            const username = href.replace(/^\\//, '').split('/')[0];
+            if (!username || username.length < 2) continue;
+            if (text.toLowerCase() !== username.toLowerCase()) continue;
+
+            // This is a username span. Skip the first one (post caption)
+            if (!captionSkipped) { captionSkipped = true; continue; }
+
+            // Look ahead in the span list for the comment text
+            let commentText = '';
+            let timestamp = null;
+
+            for (let j = i; j < Math.min(i + 10, spanList.length); j++) {
+                const nextSpan = spanList[j];
+                const nextText = nextSpan.textContent.trim();
+                if (!nextText || nextText.length < 1) continue;
+
+                // If we hit another username, stop looking
+                const nextLink = nextSpan.closest('a[href^="/"]');
+                if (nextLink) {
+                    const nextHref = nextLink.getAttribute('href') || '';
+                    const nextName = nextHref.replace(/^\\//, '').split('/')[0];
+                    if (nextName && nextName.length >= 2 &&
+                        nextText.toLowerCase() === nextName.toLowerCase() &&
+                        nextName !== username) break;
                 }
-            } catch (e) {
-                // Skip malformed elements
+
+                // Skip UI text
+                if (isUi(nextText)) continue;
+                // Skip the username itself
+                if (nextText.toLowerCase() === username.toLowerCase()) continue;
+
+                // This could be the comment text - take the longest
+                if (nextText.length > commentText.length) {
+                    commentText = nextText;
+                }
             }
-        });
-        
-        return comments;
+
+            // Also look for timestamp nearby
+            const container = span.closest('div')?.parentElement?.parentElement;
+            if (container) {
+                const timeEl = container.querySelector('time');
+                if (timeEl) timestamp = timeEl.getAttribute('datetime');
+            }
+
+            if (!commentText || seenTexts.has(commentText)) continue;
+            // Skip captions: text starts with username (e.g. "user 1dCaption...")
+            if (commentText.toLowerCase().startsWith(username.toLowerCase())) continue;
+            seenTexts.add(commentText);
+
+            results.push({
+                author: username,
+                text: commentText,
+                timestamp: timestamp || new Date().toISOString()
+            });
+        }
+
+        return results;
         """
-        
-        comments = driver.execute_script(js_script)
+
+        comments = driver.execute_script(js_script, limit) or []
         print(f"  ✓ Extracted {len(comments)} comments via JavaScript")
         
     except Exception as e:
@@ -683,92 +948,50 @@ def scrape_comments_from_post_js(driver, post_url, post_type='post'):
     return comments
 
 
-def scrape_comments_from_post(driver, post_url, post_type='post'):
+def scrape_comments_from_post(driver, post_url, post_type='post', limit=20):
     """
     Extract comments using multiple strategies with fallback.
-    
-    This is the main orchestrator function for comment extraction. It implements
-    a robust 3-strategy approach to handle Instagram's frequently changing DOM
-    structure and various edge cases:
-    
-    **Strategy 1: JSON Parsing** (Fastest, most reliable when available)
-    - Extracts comments from embedded JSON in page source (_sharedData)
-    - Works on older Instagram pages and some mobile views
-    - Provides structured data with minimal parsing
-    
-    **Strategy 2: DOM Extraction** (Most comprehensive)
-    - Uses Selenium WebDriverWait to ensure elements are loaded
-    - Clicks "View all" and "Load more" buttons to expand comments
-    - Scrolls within comment container to trigger lazy loading
-    - Supports both English and Indonesian UI text
-    
-    **Strategy 3: JavaScript Fallback** (Most resilient)
-    - Executes JavaScript directly in browser context
-    - Can access elements that Selenium selectors miss
-    - Uses same filtering logic as Strategy 2
-    - Last resort when DOM structure is unusual
-    
-    Each strategy is independent and has its own error handling. If one fails,
-    the next is attempted automatically. This ensures maximum reliability across
-    different Instagram page layouts and network conditions.
-    
+
+    Implements a robust 3-strategy approach:
+    1. JSON Parsing (fastest, from page source)
+    2. DOM Extraction (most comprehensive, with scrolling & button clicks)
+    3. JavaScript Fallback (most resilient, direct browser context)
+
     Args:
         driver: Selenium WebDriver instance with an active Instagram session
-        post_url: Full URL of the Instagram post or reel to extract comments from
-        post_type: Either 'post' or 'reel', used for logging and debugging context
-    
+        post_url: Full URL of the Instagram post or reel
+        post_type: Either 'post' or 'reel'
+        limit: Maximum number of comments to extract
+
     Returns:
-        list: Array of comment objects, each containing:
-            - author (str): Username of the commenter
-            - text (str): The comment text content
-            - timestamp (str): ISO 8601 timestamp when comment was posted
-            - likes (int): Number of likes (Strategy 1 only)
-        Returns empty list if all strategies fail (graceful degradation)
-    
-    Validates: Requirements 14.6, 14.7
+        list: Array of comment objects (empty list if all strategies fail)
     """
-    print(f"\n  Extracting comments from {post_type}: {post_url}")
-    
-    # ═══════════════════════════════════════════════════════════════════
-    # Strategy 1: Page source JSON (existing implementation)
-    # ═══════════════════════════════════════════════════════════════════
-    # This is the fastest method when available. Instagram embeds comment data
-    # in JSON structures within the page source. We parse these directly without
-    # needing to interact with the DOM.
-    print(f"  → Trying Strategy 1: JSON extraction...")
-    comments = scrape_comments_from_post_json(driver, post_url)
+    print(f"\n  Extracting comments from {post_type}: {post_url} (limit: {limit})")
+
+    # Strategy 1: Page source JSON
+    print(f"  -> Trying Strategy 1: JSON extraction...")
+    comments = scrape_comments_from_post_json(driver, post_url, limit=limit)
     if comments:
-        print(f"  ✓ Strategy 1 succeeded: Extracted {len(comments)} comments via JSON")
+        print(f"  ✓ Strategy 1 succeeded: {len(comments)} comments via JSON")
         return comments
     print(f"  ✗ Strategy 1 failed")
-    
-    # ═══════════════════════════════════════════════════════════════════
-    # Strategy 2: DOM extraction with WebDriverWait
-    # ═══════════════════════════════════════════════════════════════════
-    # This method actively interacts with the page to load and extract comments.
-    # It handles Instagram's lazy loading by clicking buttons and scrolling.
-    # Most comprehensive but slower than JSON parsing.
-    print(f"  → Trying Strategy 2: DOM extraction...")
-    comments = scrape_comments_from_post_dom(driver, post_url, post_type)
+
+    # Strategy 2: DOM extraction with WebDriverWait (longer timeouts)
+    print(f"  -> Trying Strategy 2: DOM extraction...")
+    comments = scrape_comments_from_post_dom(driver, post_url, post_type, limit=limit)
     if comments:
-        print(f"  ✓ Strategy 2 succeeded: Extracted {len(comments)} comments via DOM")
+        print(f"  ✓ Strategy 2 succeeded: {len(comments)} comments via DOM")
         return comments
     print(f"  ✗ Strategy 2 failed")
-    
-    # ═══════════════════════════════════════════════════════════════════
+
     # Strategy 3: JavaScript fallback
-    # ═══════════════════════════════════════════════════════════════════
-    # Final fallback that runs JavaScript directly in the browser context.
-    # Can access elements that Selenium sometimes misses due to timing or
-    # shadow DOM issues. Most resilient but least structured.
-    print(f"  → Trying Strategy 3: JavaScript extraction...")
-    comments = scrape_comments_from_post_js(driver, post_url, post_type)
+    print(f"  -> Trying Strategy 3: JavaScript extraction...")
+    comments = scrape_comments_from_post_js(driver, post_url, post_type, limit=limit)
     if comments:
-        print(f"  ✓ Strategy 3 succeeded: Extracted {len(comments)} comments via JavaScript")
+        print(f"  ✓ Strategy 3 succeeded: {len(comments)} comments via JavaScript")
         return comments
     print(f"  ✗ Strategy 3 failed")
-    
-    # All strategies failed - return empty list for graceful degradation
+
     print(f"  ⚠ All comment extraction strategies failed for {post_type}")
     return []
 
@@ -841,30 +1064,36 @@ def scrape_comments_from_post_json(driver, post_url, limit=20):
         # ── Strategy 2: DOM-based extraction (fallback) ──────────────
         if not comments:
             # Try to click "View all N comments" / load more
-            for _ in range(3):
+            for _ in range(5):
                 try:
                     load_more_selectors = [
                         '//button[contains(text(), "View")]',
                         '//button[contains(text(), "Load")]',
                         '//span[contains(text(), "View all")]',
                         '//a[contains(text(), "View all")]',
+                        '//span[contains(text(), "Lihat semua")]',
+                        '//a[contains(text(), "Lihat semua")]',
                     ]
+                    clicked = False
                     for selector in load_more_selectors:
                         try:
                             btn = driver.find_element(By.XPATH, selector)
                             if btn.is_displayed():
-                                btn.click()
-                                time.sleep(2)
+                                driver.execute_script("arguments[0].click();", btn)
+                                time.sleep(3)
+                                clicked = True
                                 break
                         except Exception:
                             continue
+                    if not clicked:
+                        break
                 except Exception:
                     break
 
             # Scroll to load more comments
-            for _ in range(3):
-                driver.execute_script("window.scrollBy(0, 300);")
-                time.sleep(0.5)
+            for _ in range(5):
+                driver.execute_script("window.scrollBy(0, 400);")
+                time.sleep(1)
 
             comment_container_selectors = [
                 'article ul > ul > li',
@@ -987,11 +1216,12 @@ def scrape_profile_simple(driver, profile_url, limit=5, scrape_comments=True, co
 
     print(f"✓ Found {len(post_links)} post links")
 
-    # Extract post URLs first
+    # Extract post URLs first, skipping pinned posts
     post_urls = []
     seen_ids = set()
+    pinned_count = 0
 
-    for link in post_links[:limit * 2]:
+    for link in post_links[:limit * 3]:
         if len(post_urls) >= limit:
             break
 
@@ -1000,32 +1230,26 @@ def scrape_profile_simple(driver, profile_url, limit=5, scrape_comments=True, co
             if not href:
                 continue
 
-            # ═══════════════════════════════════════════════════════════════
-            # POST TYPE DETECTION LOGIC
-            # ═══════════════════════════════════════════════════════════════
-            # Instagram uses different URL patterns for different content types:
-            # - Regular posts: /p/{post_id}/
-            # - Reels (short videos): /reel/{post_id}/
-            # 
-            # We detect the type by checking which pattern exists in the URL,
-            # then extract the post_id accordingly. This allows us to:
-            # 1. Track content type distribution (posts vs reels)
-            # 2. Apply type-specific scraping logic if needed
-            # 3. Provide better logging and debugging context
-            # 
-            # Unknown URL patterns are skipped to avoid processing invalid links.
-            # ═══════════════════════════════════════════════════════════════
-            
+            # Check if this is a pinned post - skip it
+            if is_pinned_post(driver, link):
+                pinned_count += 1
+                # Extract ID for logging
+                if '/p/' in href:
+                    pid = href.split('/p/')[1].split('/')[0]
+                elif '/reel/' in href:
+                    pid = href.split('/reel/')[1].split('/')[0]
+                else:
+                    pid = '?'
+                print(f"  📌 Skipping pinned post: {pid}")
+                continue
+
             if '/p/' in href:
-                # Regular Instagram post
                 post_id = href.split('/p/')[1].split('/')[0]
                 post_type = 'post'
             elif '/reel/' in href:
-                # Instagram Reel (short video)
                 post_id = href.split('/reel/')[1].split('/')[0]
                 post_type = 'reel'
             else:
-                # Unknown content type - skip to avoid errors
                 continue
 
             # Skip duplicates (same post_id already processed)
@@ -1038,6 +1262,11 @@ def scrape_profile_simple(driver, profile_url, limit=5, scrape_comments=True, co
         except Exception as e:
             continue
 
+    if pinned_count > 0:
+        print(f"📌 Skipped {pinned_count} pinned post(s)")
+
+    print(f"📋 Will scrape {len(post_urls)} post(s)")
+
     # Process each post
     for i, (post_id, post_url, post_type) in enumerate(post_urls, 1):
         try:
@@ -1045,7 +1274,7 @@ def scrape_profile_simple(driver, profile_url, limit=5, scrape_comments=True, co
 
             # Navigate to post to get details
             driver.get(post_url)
-            time.sleep(3)
+            time.sleep(4)  # Longer wait for full page + comments to load
 
             # Extract post data using multi-strategy extraction
             post_info = extract_post_data_from_page(driver)
@@ -1088,7 +1317,7 @@ def scrape_profile_simple(driver, profile_url, limit=5, scrape_comments=True, co
             # The post_type parameter helps with logging and debugging.
             # ═══════════════════════════════════════════════════════════════
             if scrape_comments:
-                comments = scrape_comments_from_post(driver, post_url, post_type)
+                comments = scrape_comments_from_post(driver, post_url, post_type, limit=comments_per_post)
                 post_data['comments'] = comments
                 if comments:
                     post_data['comments_count'] = len(comments)
