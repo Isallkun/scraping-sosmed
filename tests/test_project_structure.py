@@ -128,9 +128,9 @@ def test_readme_has_basic_sections():
         '# Social Media Scraper Automation',
         '## Features',
         '## Architecture',
-        '## Quick Start',
+        '## 🚀 Quick Start',  # Updated to match actual README with emoji
         '## Configuration',
-        '## Security',
+        '## Security & Compliance',  # Updated to match actual README
     ]
     
     for section in required_sections:

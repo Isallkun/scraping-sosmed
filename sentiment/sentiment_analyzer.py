@@ -190,19 +190,20 @@ class SentimentAnalyzer:
     def _analyze_post(self, post: Dict[str, Any]) -> Dict[str, Any]:
         """
         Analyze sentiment for a single post and enrich with sentiment data.
-        
+        Also analyzes comments if present.
+
         Args:
-            post: Post dictionary with 'content' field
-            
+            post: Post dictionary with 'content' field and optional 'comments' array
+
         Returns:
-            Enriched post dictionary with sentiment data
+            Enriched post dictionary with sentiment data for post and comments
         """
         # Create a copy to avoid modifying original
         enriched_post = post.copy()
-        
+
         # Get content to analyze
         content = post.get('content', '')
-        
+
         if not content:
             logger.warning(f"Post {post.get('post_id', 'unknown')} has no content")
             # Assign neutral sentiment for empty content
@@ -216,10 +217,72 @@ class SentimentAnalyzer:
                 'negative': 0.0
             }
         else:
-            # Analyze sentiment
+            # Analyze sentiment for post content
             sentiment = self.analyze_single(content)
             enriched_post['sentiment'] = sentiment
-        
+
+        # Analyze comments if present
+        if 'comments' in post and isinstance(post['comments'], list):
+            enriched_comments = []
+            comment_sentiments = []
+
+            for comment in post['comments']:
+                try:
+                    enriched_comment = comment.copy()
+                    comment_text = comment.get('text', '')
+
+                    if comment_text:
+                        # Analyze comment sentiment
+                        comment_sentiment = self.analyze_single(comment_text)
+                        enriched_comment['sentiment'] = comment_sentiment
+                        comment_sentiments.append(comment_sentiment)
+                    else:
+                        # Empty comment gets neutral sentiment
+                        enriched_comment['sentiment'] = {
+                            'score': 0.0,
+                            'label': 'neutral',
+                            'confidence': 0.0,
+                            'compound': 0.0,
+                            'positive': 0.0,
+                            'neutral': 1.0,
+                            'negative': 0.0
+                        }
+
+                    enriched_comments.append(enriched_comment)
+
+                except Exception as e:
+                    logger.error(f"Error analyzing comment: {e}")
+                    enriched_comments.append(comment)
+
+            enriched_post['comments'] = enriched_comments
+
+            # Calculate aggregate sentiment statistics for comments
+            if comment_sentiments:
+                avg_compound = sum(s.get('compound', 0) for s in comment_sentiments) / len(comment_sentiments)
+                avg_positive = sum(s.get('positive', 0) for s in comment_sentiments) / len(comment_sentiments)
+                avg_neutral = sum(s.get('neutral', 0) for s in comment_sentiments) / len(comment_sentiments)
+                avg_negative = sum(s.get('negative', 0) for s in comment_sentiments) / len(comment_sentiments)
+
+                # Count sentiment labels
+                positive_count = sum(1 for s in comment_sentiments if s.get('label') == 'positive')
+                neutral_count = sum(1 for s in comment_sentiments if s.get('label') == 'neutral')
+                negative_count = sum(1 for s in comment_sentiments if s.get('label') == 'negative')
+
+                enriched_post['comments_sentiment_summary'] = {
+                    'total_comments': len(comment_sentiments),
+                    'average_compound': round(avg_compound, 3),
+                    'average_positive': round(avg_positive, 3),
+                    'average_neutral': round(avg_neutral, 3),
+                    'average_negative': round(avg_negative, 3),
+                    'positive_count': positive_count,
+                    'neutral_count': neutral_count,
+                    'negative_count': negative_count,
+                    'positive_ratio': round(positive_count / len(comment_sentiments), 3) if comment_sentiments else 0,
+                    'negative_ratio': round(negative_count / len(comment_sentiments), 3) if comment_sentiments else 0
+                }
+
+                logger.debug(f"Post {post.get('post_id', 'unknown')}: Analyzed {len(comment_sentiments)} comments")
+
         return enriched_post
     
     @staticmethod

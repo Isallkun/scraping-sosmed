@@ -47,19 +47,105 @@ class InstagramScraper(BaseScraper):
     
     # Selectors (may need updates if Instagram changes their UI)
     SELECTORS = {
-        'username_input': 'input[name="username"]',
-        'password_input': 'input[name="password"]',
-        'login_button': 'button[type="submit"]',
-        'not_now_button': '//button[contains(text(), "Not Now")]',
-        'save_info_not_now': '//button[contains(text(), "Not now")]',
-        'article': 'article',
-        'post_link': 'a[href*="/p/"]',
+        # Login page selectors - multiple versions for fallback
+        'username_input': [
+            'input[name="username"]',
+            'input[aria-label="Phone number, username, or email"]',
+            'input[aria-label="Phone number, username or email address"]',
+            '//input[@name="username"]',
+            '//input[@type="text"]',
+        ],
+        'password_input': [
+            'input[name="password"]',
+            'input[aria-label="Password"]',
+            '//input[@name="password"]',
+            '//input[@type="password"]',
+        ],
+        'login_button': [
+            'button[type="submit"]',
+            'button:contains("Log in")',
+            'button:contains("Log In")',
+            '//button[contains(text(), "Log in")]',
+            '//button[contains(text(), "Log In")]',
+            '//button[@type="submit"]',
+        ],
+        'not_now_button': [
+            '//button[contains(text(), "Not Now")]',
+            '//button[contains(text(), "Not now")]',
+            '//button[contains(text(), "not now")]',
+            'button:contains("Not Now")',
+        ],
+        'save_info_not_now': [
+            '//button[contains(text(), "Not now")]',
+            '//button[contains(text(), "Not Now")]',
+            'button:contains("Not now")',
+        ],
+        # Profile page selectors - multiple versions for fallback
+        'article': [
+            'article',
+            'div[role="button"]',
+            'a[href*="/p/"]',
+            '//article',
+            'main article',
+            'div._aagw',  # Instagram's class (may change)
+        ],
+        'post_link': [
+            'a[href*="/p/"]',
+            'a[href*="/reel/"]',
+            '//a[contains(@href, "/p/")]',
+            '//a[contains(@href, "/reel/")]',
+        ],
         'post_caption': 'h1',
         'post_likes': 'section > div > span',
         'post_timestamp': 'time',
         'post_author': 'header a',
         'hashtag': 'a[href*="/explore/tags/"]',
     }
+    
+    def _find_element_with_fallback(self, selectors, wait_time=20, element_name="element"):
+        """
+        Try multiple selectors until one works.
+        
+        Args:
+            selectors: List of selectors to try (CSS or XPath)
+            wait_time: Maximum wait time for each selector
+            element_name: Name of element for logging
+            
+        Returns:
+            WebElement if found, None otherwise
+        """
+        if isinstance(selectors, str):
+            selectors = [selectors]
+        
+        wait = WebDriverWait(self.driver, wait_time)
+        
+        for i, selector in enumerate(selectors):
+            try:
+                self.logger.debug(f"Trying selector {i+1}/{len(selectors)} for {element_name}: {selector}")
+                
+                if selector.startswith('//'):
+                    # XPath selector
+                    element = wait.until(
+                        EC.presence_of_element_located((By.XPATH, selector))
+                    )
+                else:
+                    # CSS selector
+                    element = wait.until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    )
+                
+                self.logger.info(f"✓ Found {element_name} with selector: {selector}")
+                return element
+                
+            except TimeoutException:
+                self.logger.debug(f"✗ Selector failed: {selector}")
+                continue
+            except Exception as e:
+                self.logger.debug(f"✗ Error with selector {selector}: {e}")
+                continue
+        
+        self.logger.error(f"Could not find {element_name} with any selector")
+        return None
     
     def __init__(
         self,
@@ -117,11 +203,16 @@ class InstagramScraper(BaseScraper):
             # Wait for page to load and add human-like delay
             AntiDetection.human_like_delay(2, 4)
             
-            # Wait for username input to be present
-            wait = WebDriverWait(self.driver, 10)
-            username_input = wait.until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, self.SELECTORS['username_input']))
+            # Find username input with fallback selectors
+            self.logger.info("Looking for username input field...")
+            username_input = self._find_element_with_fallback(
+                self.SELECTORS['username_input'],
+                wait_time=20,
+                element_name="username input"
             )
+            
+            if not username_input:
+                raise AuthenticationError("Could not find username input field with any selector")
             
             self.logger.debug("Login page loaded, entering credentials...")
             
@@ -133,8 +224,18 @@ class InstagramScraper(BaseScraper):
             
             AntiDetection.human_like_delay(0.5, 1.5)
             
+            # Find password input with fallback selectors
+            self.logger.info("Looking for password input field...")
+            password_input = self._find_element_with_fallback(
+                self.SELECTORS['password_input'],
+                wait_time=10,
+                element_name="password input"
+            )
+            
+            if not password_input:
+                raise AuthenticationError("Could not find password input field with any selector")
+            
             # Enter password
-            password_input = self.driver.find_element(By.CSS_SELECTOR, self.SELECTORS['password_input'])
             password_input.clear()
             for char in self.credentials['password']:
                 password_input.send_keys(char)
@@ -142,34 +243,55 @@ class InstagramScraper(BaseScraper):
             
             AntiDetection.human_like_delay(0.5, 1.5)
             
-            # Click login button
-            self.logger.debug("Submitting login form...")
-            login_button = self.driver.find_element(By.CSS_SELECTOR, self.SELECTORS['login_button'])
-            login_button.click()
+            # Find and click login button with fallback selectors
+            self.logger.info("Looking for login button...")
+            login_button = self._find_element_with_fallback(
+                self.SELECTORS['login_button'],
+                wait_time=10,
+                element_name="login button"
+            )
+            
+            if not login_button:
+                # Try alternative: press Enter on password field
+                self.logger.info("Login button not found, trying Enter key...")
+                password_input.send_keys(Keys.RETURN)
+            else:
+                # Click login button
+                self.logger.debug("Submitting login form...")
+                login_button.click()
             
             # Wait for navigation after login
             AntiDetection.human_like_delay(3, 5)
             
-            # Handle "Save Your Login Info?" prompt
+            # Handle "Save Your Login Info?" prompt with fallback selectors
             try:
-                not_now_button = WebDriverWait(self.driver, 5).until(
-                    EC.element_to_be_clickable((By.XPATH, self.SELECTORS['not_now_button']))
+                self.logger.info("Looking for 'Save Login Info' prompt...")
+                not_now_button = self._find_element_with_fallback(
+                    self.SELECTORS['not_now_button'],
+                    wait_time=5,
+                    element_name="'Not Now' button"
                 )
-                self.logger.debug("Clicking 'Not Now' on save login info prompt")
-                not_now_button.click()
-                AntiDetection.human_like_delay(1, 2)
-            except TimeoutException:
-                self.logger.debug("No 'Save Login Info' prompt found")
+                if not_now_button:
+                    self.logger.debug("Clicking 'Not Now' on save login info prompt")
+                    not_now_button.click()
+                    AntiDetection.human_like_delay(1, 2)
+            except Exception as e:
+                self.logger.debug(f"No 'Save Login Info' prompt found: {e}")
             
-            # Handle "Turn on Notifications" prompt
+            # Handle "Turn on Notifications" prompt with fallback selectors
             try:
-                not_now_button = WebDriverWait(self.driver, 5).until(
-                    EC.element_to_be_clickable((By.XPATH, self.SELECTORS['save_info_not_now']))
+                self.logger.info("Looking for 'Turn on Notifications' prompt...")
+                not_now_button = self._find_element_with_fallback(
+                    self.SELECTORS['save_info_not_now'],
+                    wait_time=5,
+                    element_name="'Not now' button"
                 )
-                self.logger.debug("Clicking 'Not Now' on notifications prompt")
-                not_now_button.click()
-                AntiDetection.human_like_delay(1, 2)
-            except TimeoutException:
+                if not_now_button:
+                    self.logger.debug("Clicking 'Not Now' on notifications prompt")
+                    not_now_button.click()
+                    AntiDetection.human_like_delay(1, 2)
+            except Exception as e:
+                self.logger.debug(f"No 'Turn on Notifications' prompt found: {e}")
                 self.logger.debug("No 'Turn on Notifications' prompt found")
             
             # Verify successful login by checking if we're redirected away from login page
@@ -233,9 +355,16 @@ class InstagramScraper(BaseScraper):
             # Wait for page to load
             AntiDetection.human_like_delay(2, 4)
             
-            # Wait for articles (posts) to load
-            wait = WebDriverWait(self.driver, 10)
-            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, self.SELECTORS['article'])))
+            # Wait for posts to load with fallback selectors
+            self.logger.info("Looking for posts on profile page...")
+            posts_container = self._find_element_with_fallback(
+                self.SELECTORS['article'],
+                wait_time=15,
+                element_name="posts container"
+            )
+            
+            if not posts_container:
+                self.logger.warning("Could not find posts container, trying to find post links directly...")
             
             self.logger.info(f"Starting to scrape posts (limit: {limit})")
             
@@ -246,8 +375,22 @@ class InstagramScraper(BaseScraper):
                 # Apply rate limiting
                 self.apply_rate_limiting()
                 
-                # Find all post links on current page
-                post_links = self.driver.find_elements(By.CSS_SELECTOR, self.SELECTORS['post_link'])
+                # Find all post links on current page with fallback selectors
+                post_links = []
+                for selector in self.SELECTORS['post_link']:
+                    try:
+                        if selector.startswith('//'):
+                            links = self.driver.find_elements(By.XPATH, selector)
+                        else:
+                            links = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                        
+                        if links:
+                            post_links = links
+                            self.logger.debug(f"Found {len(links)} post links with selector: {selector}")
+                            break
+                    except Exception as e:
+                        self.logger.debug(f"Selector failed: {selector} - {e}")
+                        continue
                 
                 self.logger.debug(f"Found {len(post_links)} post links on page")
                 
@@ -490,27 +633,224 @@ class InstagramScraper(BaseScraper):
     def _scroll_page(self) -> None:
         """
         Scroll the page down to load more posts.
-        
+
         Uses JavaScript to scroll to the bottom of the page,
         triggering Instagram's infinite scroll to load more content.
         """
         try:
             # Get current scroll position
             last_height = self.driver.execute_script("return document.body.scrollHeight")
-            
+
             # Scroll to bottom
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            
+
             # Wait for new content to load
             AntiDetection.human_like_delay(2, 3)
-            
+
             # Check if new content loaded
             new_height = self.driver.execute_script("return document.body.scrollHeight")
-            
+
             if new_height == last_height:
                 self.logger.debug("No new content loaded after scroll")
             else:
                 self.logger.debug(f"Page height increased from {last_height} to {new_height}")
-                
+
         except Exception as e:
             self.logger.warning(f"Error during page scroll: {e}")
+
+    def scrape_post_comments(self, post_url: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        Scrape comments from a specific Instagram post.
+
+        Args:
+            post_url: URL of the Instagram post
+            limit: Maximum number of comments to scrape (default: 50)
+
+        Returns:
+            List of dictionaries containing comment data
+        """
+        comments = []
+
+        try:
+            self.logger.info(f"Scraping comments from {post_url}")
+
+            # Navigate to post
+            self.driver.get(post_url)
+            AntiDetection.human_like_delay(2, 4)
+
+            # Try to load more comments by clicking "View more comments" or "Load more comments"
+            load_more_attempts = 0
+            max_load_attempts = 5
+
+            while load_more_attempts < max_load_attempts:
+                try:
+                    # Look for "View more comments" button
+                    load_more_selectors = [
+                        '//button[contains(text(), "View more comments")]',
+                        '//button[contains(text(), "Load more comments")]',
+                        '//span[contains(text(), "View all")]',
+                        'button[aria-label*="Load more comments"]',
+                    ]
+
+                    load_more_button = None
+                    for selector in load_more_selectors:
+                        try:
+                            if selector.startswith('//'):
+                                load_more_button = self.driver.find_element(By.XPATH, selector)
+                            else:
+                                load_more_button = self.driver.find_element(By.CSS_SELECTOR, selector)
+
+                            if load_more_button and load_more_button.is_displayed():
+                                self.logger.debug("Found 'Load more comments' button, clicking...")
+                                load_more_button.click()
+                                AntiDetection.human_like_delay(1, 2)
+                                load_more_attempts += 1
+                                break
+                        except (NoSuchElementException, Exception):
+                            continue
+
+                    if not load_more_button:
+                        break
+
+                except Exception as e:
+                    self.logger.debug(f"No more 'Load more comments' button: {e}")
+                    break
+
+            # Scroll down to load more comments
+            for _ in range(3):
+                self.driver.execute_script("window.scrollBy(0, 500);")
+                AntiDetection.human_like_delay(0.5, 1)
+
+            # Find all comment elements
+            comment_selectors = [
+                'ul li div[role="button"]',
+                'ul li',
+                'article ul li',
+                '//ul//li[.//span[contains(@class, "")]]',
+            ]
+
+            comment_elements = []
+            for selector in comment_selectors:
+                try:
+                    if selector.startswith('//'):
+                        elements = self.driver.find_elements(By.XPATH, selector)
+                    else:
+                        elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+
+                    if elements and len(elements) > 0:
+                        comment_elements = elements
+                        self.logger.debug(f"Found {len(elements)} comment elements with selector: {selector}")
+                        break
+                except Exception as e:
+                    self.logger.debug(f"Selector failed: {selector} - {e}")
+                    continue
+
+            self.logger.info(f"Found {len(comment_elements)} comment elements")
+
+            # Extract comment data
+            seen_comments = set()
+            for element in comment_elements[:limit]:
+                try:
+                    # Extract comment text
+                    comment_text = ""
+                    try:
+                        # Try multiple selectors for comment text
+                        text_selectors = [
+                            './/span[not(@aria-label)]',
+                            './/span',
+                            './/*[self::span or self::div]'
+                        ]
+
+                        for selector in text_selectors:
+                            text_elements = element.find_elements(By.XPATH, selector)
+                            for text_elem in text_elements:
+                                text = text_elem.text.strip()
+                                if text and len(text) > len(comment_text):
+                                    # Avoid duplicate text or username-only text
+                                    if len(text) > 3 and not text.endswith('•'):
+                                        comment_text = text
+                                        break
+
+                            if comment_text:
+                                break
+                    except Exception as e:
+                        self.logger.debug(f"Could not extract comment text: {e}")
+
+                    # Skip if no text found or duplicate
+                    if not comment_text or comment_text in seen_comments:
+                        continue
+
+                    seen_comments.add(comment_text)
+
+                    # Extract author
+                    author = "unknown"
+                    try:
+                        # Look for username link
+                        author_links = element.find_elements(By.CSS_SELECTOR, 'a[href*="/"]')
+                        if author_links:
+                            author_href = author_links[0].get_attribute('href')
+                            if author_href:
+                                # Extract username from URL
+                                parts = author_href.rstrip('/').split('/')
+                                if len(parts) > 0:
+                                    potential_username = parts[-1]
+                                    # Verify it's a username (not a post ID)
+                                    if not potential_username.startswith('p') and len(potential_username) > 0:
+                                        author = potential_username
+                    except Exception as e:
+                        self.logger.debug(f"Could not extract author: {e}")
+
+                    # Extract timestamp
+                    timestamp = datetime.utcnow()
+                    try:
+                        time_elements = element.find_elements(By.TAG_NAME, 'time')
+                        if time_elements:
+                            datetime_attr = time_elements[0].get_attribute('datetime')
+                            if datetime_attr:
+                                timestamp = datetime.fromisoformat(datetime_attr.replace('Z', '+00:00'))
+                    except Exception as e:
+                        self.logger.debug(f"Could not extract timestamp: {e}")
+
+                    # Extract likes count
+                    likes = 0
+                    try:
+                        # Look for like button or like count
+                        like_buttons = element.find_elements(By.CSS_SELECTOR, 'button')
+                        for btn in like_buttons:
+                            aria_label = btn.get_attribute('aria-label')
+                            if aria_label and ('like' in aria_label.lower() or 'suka' in aria_label.lower()):
+                                # Try to extract number from aria-label
+                                match = re.search(r'(\d+)', aria_label)
+                                if match:
+                                    likes = int(match.group(1))
+                                    break
+                    except Exception as e:
+                        self.logger.debug(f"Could not extract likes: {e}")
+
+                    # Build comment data
+                    comment_data = {
+                        'author': author,
+                        'text': comment_text,
+                        'timestamp': timestamp.isoformat(),
+                        'likes': likes,
+                    }
+
+                    comments.append(comment_data)
+                    self.logger.debug(f"Extracted comment {len(comments)}: {author[:20]}...")
+
+                    if len(comments) >= limit:
+                        break
+
+                except StaleElementReferenceException:
+                    self.logger.debug("Stale element reference while extracting comment")
+                    continue
+                except Exception as e:
+                    self.logger.debug(f"Error extracting comment data: {e}")
+                    continue
+
+            self.logger.info(f"Successfully scraped {len(comments)} comments from {post_url}")
+            return comments
+
+        except Exception as e:
+            self.logger.error(f"Error scraping comments from {post_url}: {e}", exc_info=True)
+            return comments
