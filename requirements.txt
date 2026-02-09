@@ -1,0 +1,20 @@
+# Web Scraping Dependencies
+selenium==4.16.0
+beautifulsoup4==4.12.2
+webdriver-manager==4.0.1
+
+# Data Processing
+pandas==2.1.4
+
+# Sentiment Analysis
+vaderSentiment==3.3.2
+textblob==0.17.1
+
+# Database
+psycopg2-binary==2.9.9
+
+# Configuration Management
+python-dotenv==1.0.0
+
+# Utilities
+requests==2.31.0
