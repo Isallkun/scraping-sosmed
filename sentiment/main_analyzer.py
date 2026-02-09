@@ -9,6 +9,7 @@ sentiment of scraped social media posts.
 
 import argparse
 import json
+import csv
 import logging
 import sys
 from pathlib import Path
@@ -60,8 +61,16 @@ Examples:
         '--output',
         '-o',
         type=str,
-        required=True,
-        help='Path to output JSON file with sentiment analysis results'
+        required=False,
+        help='Path to output JSON file with sentiment analysis results (optional if --output-dir is used)'
+    )
+    
+    parser.add_argument(
+        '--output-dir',
+        '-d',
+        type=str,
+        required=False,
+        help='Directory to save sentiment results (will create sentiment subfolder structure)'
     )
     
     parser.add_argument(
@@ -155,6 +164,78 @@ def validate_output_path(output_path: str) -> bool:
         return False
 
 
+def export_sentiment_to_csv(json_path: str, csv_path: str) -> None:
+    """
+    Export sentiment analysis results to CSV format.
+    
+    Args:
+        json_path: Path to sentiment JSON file
+        csv_path: Path to output CSV file
+    """
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        posts = data.get('posts', [])
+        if not posts:
+            logger.warning("No posts found in sentiment JSON")
+            return
+        
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+            fieldnames = [
+                'post_id', 'post_type', 'author', 'content', 'likes', 'comments_count',
+                'sentiment_label', 'sentiment_score', 'sentiment_compound',
+                'sentiment_positive', 'sentiment_neutral', 'sentiment_negative',
+                'sentiment_model'
+            ]
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            
+            for post in posts:
+                sentiment = post.get('sentiment', {})
+                row = {
+                    'post_id': post.get('post_id'),
+                    'post_type': post.get('post_type'),
+                    'author': post.get('author'),
+                    'content': post.get('content', '').replace('\n', ' ')[:200],  # Truncate for CSV
+                    'likes': post.get('likes'),
+                    'comments_count': post.get('comments_count'),
+                    'sentiment_label': sentiment.get('label'),
+                    'sentiment_score': sentiment.get('score'),
+                    'sentiment_compound': sentiment.get('compound'),
+                    'sentiment_positive': sentiment.get('positive'),
+                    'sentiment_neutral': sentiment.get('neutral'),
+                    'sentiment_negative': sentiment.get('negative'),
+                    'sentiment_model': sentiment.get('model')
+                }
+                writer.writerow(row)
+        
+        logger.info(f"Exported sentiment to CSV: {csv_path}")
+    except Exception as e:
+        logger.error(f"Error exporting sentiment to CSV: {e}")
+
+
+def validate_output_path(output_path: str) -> bool:
+    """
+    Validate that output path is writable.
+    
+    Args:
+        output_path: Path to output file
+        
+    Returns:
+        True if valid, False otherwise
+    """
+    output_file = Path(output_path)
+    
+    # Check if parent directory exists or can be created
+    try:
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        return True
+    except Exception as e:
+        logger.error(f"Cannot create output directory: {e}")
+        return False
+
+
 def main() -> int:
     """
     Main entry point for sentiment analyzer CLI.
@@ -166,6 +247,11 @@ def main() -> int:
         # Parse arguments
         args = parse_arguments()
         
+        # Validate that either output or output-dir is provided
+        if not args.output and not args.output_dir:
+            logger.error("Either --output or --output-dir must be specified")
+            return 2
+        
         # Configure logging level
         if args.verbose:
             logging.getLogger().setLevel(logging.DEBUG)
@@ -173,7 +259,6 @@ def main() -> int:
         
         logger.info("Starting sentiment analysis CLI")
         logger.info(f"Input: {args.input}")
-        logger.info(f"Output: {args.output}")
         logger.info(f"Model: {args.model}")
         logger.info(f"Batch size: {args.batch_size}")
         
@@ -182,8 +267,27 @@ def main() -> int:
             logger.error("Input validation failed")
             return 2
         
+        # Determine output path
+        if args.output_dir:
+            # Create sentiment folder structure
+            input_path = Path(args.input)
+            input_filename = input_path.stem  # filename without extension
+            
+            sentiment_dir = Path(args.output_dir) / "sentiment"
+            sentiment_dir.mkdir(parents=True, exist_ok=True)
+            
+            output_json = sentiment_dir / f"{input_filename}_sentiment.json"
+            output_csv = sentiment_dir / f"{input_filename}_sentiment.csv"
+            
+            logger.info(f"Output JSON: {output_json}")
+            logger.info(f"Output CSV: {output_csv}")
+        else:
+            output_json = Path(args.output)
+            output_csv = output_json.with_suffix('.csv')
+            logger.info(f"Output: {output_json}")
+        
         # Validate output path
-        if not validate_output_path(args.output):
+        if not validate_output_path(str(output_json)):
             logger.error("Output path validation failed")
             return 3
         
@@ -204,7 +308,10 @@ def main() -> int:
         
         # Execute analysis workflow
         try:
-            stats = analyzer.analyze_file(args.input, args.output)
+            stats = analyzer.analyze_file(args.input, str(output_json))
+            
+            # Export to CSV as well
+            export_sentiment_to_csv(str(output_json), str(output_csv))
             
             # Log summary
             logger.info("=" * 60)
@@ -213,7 +320,8 @@ def main() -> int:
             logger.info(f"Total posts processed: {stats['total_posts']}")
             logger.info(f"Errors encountered: {stats['error_count']}")
             logger.info(f"Model used: {stats['model']}")
-            logger.info(f"Output written to: {args.output}")
+            logger.info(f"Output JSON: {output_json}")
+            logger.info(f"Output CSV: {output_csv}")
             logger.info("=" * 60)
             
             # Return non-zero exit code if there were errors

@@ -135,6 +135,7 @@ DEPENDENCIES:
 import os
 import sys
 import json
+import csv
 import re
 import time
 from datetime import datetime
@@ -156,6 +157,139 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from scraper.config import get_config
 from scraper.utils.anti_detection import AntiDetection
+
+
+def _safe_decode(text):
+    """Safely decode unicode escape sequences, removing invalid surrogates."""
+    try:
+        decoded = text.encode('raw_unicode_escape').decode('unicode_escape', errors='replace')
+        # Remove surrogates that can't be encoded to UTF-8
+        return decoded.encode('utf-8', errors='surrogateescape').decode('utf-8', errors='replace')
+    except Exception:
+        return text
+
+
+def _parse_count(text):
+    """Parse count from text like '1,234' or '1.2K' or '3M'"""
+    text = text.strip().replace(',', '')
+    if text.upper().endswith('K'):
+        return int(float(text[:-1]) * 1000)
+    elif text.upper().endswith('M'):
+        return int(float(text[:-1]) * 1000000)
+    try:
+        return int(float(text))
+    except (ValueError, TypeError):
+        return 0
+
+
+def extract_all_comments(posts):
+    """Extract all comments from posts into a flat list with post_id reference"""
+    all_comments = []
+    for post in posts:
+        post_id = post.get('post_id')
+        post_type = post.get('post_type')
+        post_url = post.get('post_url')
+        
+        for comment in post.get('comments', []):
+            comment_with_ref = {
+                'post_id': post_id,
+                'post_type': post_type,
+                'post_url': post_url,
+                'comment_author': comment.get('author'),
+                'comment_text': comment.get('text'),
+                'comment_timestamp': comment.get('timestamp'),
+                'comment_likes': comment.get('likes', 0)
+            }
+            all_comments.append(comment_with_ref)
+    
+    return all_comments
+
+
+def export_posts_to_csv(posts, csv_path):
+    """Export posts to CSV format (flat structure, without nested comments)"""
+    if not posts:
+        return
+    
+    try:
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+            fieldnames = [
+                'post_id', 'post_type', 'post_url', 'author', 'content',
+                'timestamp', 'likes', 'comments_count', 'hashtags', 'scraped_at'
+            ]
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            
+            for post in posts:
+                row = {
+                    'post_id': post.get('post_id'),
+                    'post_type': post.get('post_type'),
+                    'post_url': post.get('post_url'),
+                    'author': post.get('author'),
+                    'content': post.get('content', '').replace('\n', ' '),
+                    'timestamp': post.get('timestamp'),
+                    'likes': post.get('likes'),
+                    'comments_count': post.get('comments_count'),
+                    'hashtags': ', '.join(post.get('hashtags', [])),
+                    'scraped_at': post.get('scraped_at')
+                }
+                writer.writerow(row)
+        
+        print(f"  ✓ Exported posts to CSV: {csv_path}")
+    except Exception as e:
+        print(f"  ✗ Error exporting posts to CSV: {e}")
+
+
+def export_comments_to_json(comments, json_path):
+    """Export comments to JSON format"""
+    if not comments:
+        return
+    
+    try:
+        result = {
+            'metadata': {
+                'total_comments': len(comments),
+                'exported_at': datetime.utcnow().isoformat() + 'Z'
+            },
+            'comments': comments
+        }
+        
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(result, f, indent=2, ensure_ascii=False)
+        
+        print(f"  ✓ Exported {len(comments)} comments to JSON: {json_path}")
+    except Exception as e:
+        print(f"  ✗ Error exporting comments to JSON: {e}")
+
+
+def export_comments_to_csv(comments, csv_path):
+    """Export comments to CSV format"""
+    if not comments:
+        return
+    
+    try:
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+            fieldnames = [
+                'post_id', 'post_type', 'post_url', 'comment_author',
+                'comment_text', 'comment_timestamp', 'comment_likes'
+            ]
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            
+            for comment in comments:
+                row = {
+                    'post_id': comment.get('post_id'),
+                    'post_type': comment.get('post_type'),
+                    'post_url': comment.get('post_url'),
+                    'comment_author': comment.get('comment_author'),
+                    'comment_text': comment.get('comment_text', '').replace('\n', ' '),
+                    'comment_timestamp': comment.get('comment_timestamp'),
+                    'comment_likes': comment.get('comment_likes', 0)
+                }
+                writer.writerow(row)
+        
+        print(f"  ✓ Exported {len(comments)} comments to CSV: {csv_path}")
+    except Exception as e:
+        print(f"  ✗ Error exporting comments to CSV: {e}")
 
 
 def _safe_decode(text):
@@ -1392,14 +1526,22 @@ def main():
         # Scrape
         posts = scrape_profile_simple(driver, target_url, limit, scrape_comments, comments_per_post)
         
-        # Save results
+        # Save results with hybrid output (JSON + CSV)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
         # Create organized folder structure
         output_base = Path("output") / "instagram"
-        output_base.mkdir(parents=True, exist_ok=True)
+        raw_folder = output_base / "raw"
+        comments_folder = output_base / "comments"
+        
+        raw_folder.mkdir(parents=True, exist_ok=True)
+        comments_folder.mkdir(parents=True, exist_ok=True)
 
-        output_path = output_base / f"posts_{timestamp}.json"
+        # File paths
+        posts_json_path = raw_folder / f"posts_{timestamp}.json"
+        posts_csv_path = raw_folder / f"posts_{timestamp}.csv"
+        comments_json_path = comments_folder / f"comments_{timestamp}.json"
+        comments_csv_path = comments_folder / f"comments_{timestamp}.csv"
 
         # Calculate total comments
         total_comments = sum(post.get('comments_count', 0) for post in posts)
@@ -1430,15 +1572,33 @@ def main():
             'posts': posts
         }
 
-        with open(output_path, 'w', encoding='utf-8') as f:
+        # Save full JSON (nested structure)
+        with open(posts_json_path, 'w', encoding='utf-8') as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
+        
+        # Export posts to CSV (flat structure, without nested comments)
+        export_posts_to_csv(posts, posts_csv_path)
+        
+        # Export comments separately (JSON + CSV)
+        all_comments = []
+        if scrape_comments:
+            all_comments = extract_all_comments(posts)
+            if all_comments:
+                export_comments_to_json(all_comments, comments_json_path)
+                export_comments_to_csv(all_comments, comments_csv_path)
 
         print()
         print("=" * 70)
         print("✅ Scraping Completed!")
         print("=" * 70)
         print()
-        print(f"📁 Output: {output_path}")
+        print(f"📁 Output Files:")
+        print(f"   JSON (Full): {posts_json_path}")
+        print(f"   CSV (Posts): {posts_csv_path}")
+        if scrape_comments and all_comments:
+            print(f"   JSON (Comments): {comments_json_path}")
+            print(f"   CSV (Comments): {comments_csv_path}")
+        print()
         print(f"📊 Posts scraped: {len(posts)}")
         
         # Show post and reel counts separately (Requirement 13.4)
@@ -1471,9 +1631,9 @@ def main():
                 print()
 
         print("Next Steps:")
-        print(f"1. View results: python view_results.py {output_path}")
-        print(f"2. Analyze sentiment: python -m sentiment.main_analyzer --input {output_path} --output {str(output_path).replace('.json', '_sentiment.json')}")
-        print(f"3. Scrape without comments: python scrape_instagram_simple.py <url> <limit> <headless> false")
+        print(f"1. View results: python view_results.py {posts_json_path}")
+        print(f"2. Analyze sentiment: python -m sentiment.main_analyzer --input {posts_json_path} --output-dir output/instagram/sentiment")
+        print(f"3. Open CSV in Excel: {posts_csv_path}")
         print()
         
     except KeyboardInterrupt:
