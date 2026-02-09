@@ -167,7 +167,23 @@ class TestScraperLogger:
         """Create a temporary directory for log files."""
         temp_dir = tempfile.mkdtemp()
         yield temp_dir
-        shutil.rmtree(temp_dir)
+        # Close all handlers before cleanup
+        import logging
+        for handler in logging.root.handlers[:]:
+            handler.close()
+            logging.root.removeHandler(handler)
+        # Wait a bit for Windows to release file handles
+        import time
+        time.sleep(0.1)
+        try:
+            shutil.rmtree(temp_dir)
+        except PermissionError:
+            # If still locked, try again after a short delay
+            time.sleep(0.5)
+            try:
+                shutil.rmtree(temp_dir)
+            except PermissionError:
+                pass  # Give up if still locked
     
     def test_logger_creates_log_directory(self, temp_log_dir):
         """Test that logger creates log directory if it doesn't exist."""
@@ -336,7 +352,23 @@ class TestGetLogger:
         """Create a temporary directory for log files."""
         temp_dir = tempfile.mkdtemp()
         yield temp_dir
-        shutil.rmtree(temp_dir)
+        # Close all handlers before cleanup
+        import logging
+        for handler in logging.root.handlers[:]:
+            handler.close()
+            logging.root.removeHandler(handler)
+        # Wait a bit for Windows to release file handles
+        import time
+        time.sleep(0.1)
+        try:
+            shutil.rmtree(temp_dir)
+        except PermissionError:
+            # If still locked, try again after a short delay
+            time.sleep(0.5)
+            try:
+                shutil.rmtree(temp_dir)
+            except PermissionError:
+                pass  # Give up if still locked
     
     def test_get_logger_returns_logger(self, temp_log_dir):
         """Test that get_logger returns a logger instance."""
@@ -384,7 +416,23 @@ class TestLogEntryFormat:
         """Create a temporary directory for log files."""
         temp_dir = tempfile.mkdtemp()
         yield temp_dir
-        shutil.rmtree(temp_dir)
+        # Close all handlers before cleanup
+        import logging
+        for handler in logging.root.handlers[:]:
+            handler.close()
+            logging.root.removeHandler(handler)
+        # Wait a bit for Windows to release file handles
+        import time
+        time.sleep(0.1)
+        try:
+            shutil.rmtree(temp_dir)
+        except PermissionError:
+            # If still locked, try again after a short delay
+            time.sleep(0.5)
+            try:
+                shutil.rmtree(temp_dir)
+            except PermissionError:
+                pass  # Give up if still locked
     
     def test_log_entry_has_all_required_fields(self, temp_log_dir):
         """Test that log entries contain timestamp, level, component, and message."""
@@ -458,7 +506,23 @@ class TestErrorLogging:
         """Create a temporary directory for log files."""
         temp_dir = tempfile.mkdtemp()
         yield temp_dir
-        shutil.rmtree(temp_dir)
+        # Close all handlers before cleanup
+        import logging
+        for handler in logging.root.handlers[:]:
+            handler.close()
+            logging.root.removeHandler(handler)
+        # Wait a bit for Windows to release file handles
+        import time
+        time.sleep(0.1)
+        try:
+            shutil.rmtree(temp_dir)
+        except PermissionError:
+            # If still locked, try again after a short delay
+            time.sleep(0.5)
+            try:
+                shutil.rmtree(temp_dir)
+            except PermissionError:
+                pass  # Give up if still locked
     
     def test_error_logging_includes_exception_info(self, temp_log_dir):
         """Test that error logging includes exception information."""

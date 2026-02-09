@@ -141,7 +141,7 @@ class TestScraperConfig:
         
         with patch.dict(os.environ, {
             'SCRAPER_PLATFORM': 'instagram',
-        }):
+        }, clear=True):
             config = ScraperConfig(load_env=False)
             assert config.has_credentials() is False
     
@@ -201,28 +201,61 @@ class TestScraperCLI:
         """Test CLI with valid arguments."""
         with patch.dict(os.environ, {
             'SCRAPER_PLATFORM': 'instagram',
+            'SCRAPER_USERNAME': 'testuser',
+            'SCRAPER_PASSWORD': 'testpass',
         }):
             cli = ScraperCLI()
-            # This should work but will show "implementation pending" message
-            exit_code = cli.run(['--target', 'https://instagram.com/test'])
-            assert exit_code == 0
+            # Mock the scraper to avoid actual scraping
+            with patch('scraper.scrapers.InstagramScraper') as mock_scraper:
+                mock_instance = mock_scraper.return_value
+                mock_instance.scrape.return_value = {
+                    'metadata': {
+                        'platform': 'instagram',
+                        'scraped_at': '2024-01-01T00:00:00Z',
+                        'target_url': 'https://instagram.com/test',
+                        'total_posts': 0
+                    },
+                    'posts': []
+                }
+                mock_instance.errors_encountered = 0
+                
+                exit_code = cli.run(['--target', 'https://instagram.com/test'])
+                assert exit_code == 0
     
     def test_cli_platform_override(self):
         """Test that CLI platform argument overrides environment."""
         with patch.dict(os.environ, {
             'SCRAPER_PLATFORM': 'instagram',
+            'SCRAPER_USERNAME': 'testuser',
+            'SCRAPER_PASSWORD': 'testpass',
         }):
             cli = ScraperCLI()
-            exit_code = cli.run([
-                '--platform', 'twitter',
-                '--target', 'https://twitter.com/test'
-            ])
-            assert exit_code == 0
+            # Mock the scraper to avoid actual scraping
+            with patch('scraper.scrapers.TwitterScraper') as mock_scraper:
+                mock_instance = mock_scraper.return_value
+                mock_instance.scrape.return_value = {
+                    'metadata': {
+                        'platform': 'twitter',
+                        'scraped_at': '2024-01-01T00:00:00Z',
+                        'target_url': 'https://twitter.com/test',
+                        'total_posts': 0
+                    },
+                    'posts': []
+                }
+                mock_instance.errors_encountered = 0
+                
+                exit_code = cli.run([
+                    '--platform', 'twitter',
+                    '--target', 'https://twitter.com/test'
+                ])
+                assert exit_code == 0
     
     def test_cli_output_structure(self):
         """Test that CLI creates correct output structure."""
         with patch.dict(os.environ, {
             'SCRAPER_PLATFORM': 'instagram',
+            'SCRAPER_USERNAME': 'testuser',
+            'SCRAPER_PASSWORD': 'testpass',
         }):
             cli = ScraperCLI()
             
@@ -231,11 +264,25 @@ class TestScraperCLI:
                 temp_output = f.name
             
             try:
-                exit_code = cli.run([
-                    '--target', 'https://instagram.com/test',
-                    '--output', temp_output
-                ])
-                assert exit_code == 0
+                # Mock the scraper to avoid actual scraping
+                with patch('scraper.scrapers.InstagramScraper') as mock_scraper:
+                    mock_instance = mock_scraper.return_value
+                    mock_instance.scrape.return_value = {
+                        'metadata': {
+                            'platform': 'instagram',
+                            'scraped_at': '2024-01-01T00:00:00Z',
+                            'target_url': 'https://instagram.com/test',
+                            'total_posts': 0
+                        },
+                        'posts': []
+                    }
+                    mock_instance.errors_encountered = 0
+                    
+                    exit_code = cli.run([
+                        '--target', 'https://instagram.com/test',
+                        '--output', temp_output
+                    ])
+                    assert exit_code == 0
                 
                 # Verify output file was created
                 assert os.path.exists(temp_output)

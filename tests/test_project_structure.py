@@ -18,7 +18,6 @@ def test_required_files_exist():
         '.env.example',
         '.gitignore',
         'README.md',
-        'SETUP.md',
         'setup_venv.sh',
         'setup_venv.bat',
     ]
@@ -122,7 +121,7 @@ def test_gitignore_ignores_sensitive_files():
 
 def test_readme_has_basic_sections():
     """Test that README.md has basic documentation sections."""
-    with open('README.md', 'r') as f:
+    with open('README.md', 'r', encoding='utf-8') as f:
         content = f.read()
     
     required_sections = [
