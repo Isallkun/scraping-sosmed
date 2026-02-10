@@ -13,6 +13,11 @@ textblob==0.17.1
 # Database
 psycopg2-binary==2.9.9
 
+# Flask Web Framework
+Flask==3.0.0
+Flask-Caching==2.1.0
+Flask-CORS==4.0.0
+
 # Configuration Management
 python-dotenv==1.0.0
 
