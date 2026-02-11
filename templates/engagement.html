@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Page Header -->
+    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+            <h2 class="text-2xl font-bold text-gray-900 dark:text-white">Engagement Metrics</h2>
+            <p class="text-gray-600 dark:text-gray-400 mt-1">Analyze post performance and audience interaction</p>
+        </div>
+        
+        <!-- Date Range Filter -->
+        <div class="flex items-center space-x-3">
+            <div class="flex items-center space-x-2">
+                <label class="form-label mb-0 text-sm">From:</label>
+                <input type="date" id="start-date" class="form-input text-sm py-1.5">
+            </div>
+            <div class="flex items-center space-x-2">
+                <label class="form-label mb-0 text-sm">To:</label>
+                <input type="date" id="end-date" class="form-input text-sm py-1.5">
+            </div>
+            <button id="apply-filter" class="btn-primary btn-sm">
+                <span class="material-symbols-outlined">filter_alt</span>
+                <span>Apply</span>
+            </button>
+        </div>
+    </div>
+    
+    <!-- Engagement Summary Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div class="card">
+            <div class="flex items-center justify-between">
+                <div>
+                    <div class="text-2xl font-bold text-primary-600 dark:text-primary-400" id="avg-engagement-rate">-</div>
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Avg Engagement Rate</div>
+                </div>
+                <span class="material-symbols-outlined text-primary-600 dark:text-primary-400 text-4xl">
+                    trending_up
+                </span>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="flex items-center justify-between">
+                <div>
+                    <div class="text-2xl font-bold text-blue-600 dark:text-blue-400" id="total-likes">-</div>
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Total Likes</div>
+                </div>
+                <span class="material-symbols-outlined text-blue-600 dark:text-blue-400 text-4xl">
+                    favorite
+                </span>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="flex items-center justify-between">
+                <div>
+                    <div class="text-2xl font-bold text-green-600 dark:text-green-400" id="total-comments">-</div>
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Total Comments</div>
+                </div>
+                <span class="material-symbols-outlined text-green-600 dark:text-green-400 text-4xl">
+                    comment
+                </span>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="flex items-center justify-between">
+                <div>
+                    <div class="text-2xl font-bold text-purple-600 dark:text-purple-400" id="best-post-rate">-</div>
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Best Post Rate</div>
+                </div>
+                <span class="material-symbols-outlined text-purple-600 dark:text-purple-400 text-4xl">
+                    star
+                </span>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Charts Row -->
+    <div class="grid-responsive-2">
+        <!-- Engagement Trends -->
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <span class="material-symbols-outlined">show_chart</span>
+                    <span>Engagement Trends Over Time</span>
+                </h3>
+            </div>
+            <div class="chart-container" style="height: 300px;">
+                <canvas id="engagement-trend-chart"></canvas>
+            </div>
+        </div>
+        
+        <!-- Post Type Distribution -->
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <span class="material-symbols-outlined">pie_chart</span>
+                    <span>Engagement by Post Type</span>
+                </h3>
+            </div>
+            <div class="chart-container" style="height: 300px;">
+                <canvas id="post-type-chart"></canvas>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Top Posts Table -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">
+                <span class="material-symbols-outlined">leaderboard</span>
+                <span>Top 10 Posts by Engagement</span>
+            </h3>
+            <div class="flex items-center space-x-2">
+                <label class="text-sm text-gray-600 dark:text-gray-400">Sort by:</label>
+                <select id="sort-by" class="form-select text-sm py-1.5">
+                    <option value="engagement_rate">Engagement Rate</option>
+                    <option value="likes">Likes</option>
+                    <option value="comments">Comments</option>
+                    <option value="total_interactions">Total Interactions</option>
+                </select>
+            </div>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th class="w-12">#</th>
+                        <th>Author</th>
+                        <th>Caption</th>
+                        <th class="text-right">Likes</th>
+                        <th class="text-right">Comments</th>
+                        <th class="text-right">Engagement Rate</th>
+                        <th>Post Type</th>
+                        <th>Date</th>
+                    </tr>
+                </thead>
+                <tbody id="top-posts-table">
+                    <tr>
+                        <td colspan="8" class="text-center py-8 text-gray-500">Loading...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <!-- Likes vs Comments Scatter -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">
+                <span class="material-symbols-outlined">scatter_plot</span>
+                <span>Likes vs Comments Distribution</span>
+            </h3>
+        </div>
+        <div class="chart-container" style="height: 350px;">
+            <canvas id="scatter-chart"></canvas>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/engagement.js') }}"></script>
+{% endblock %}

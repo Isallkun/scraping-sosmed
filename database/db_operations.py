@@ -448,6 +448,94 @@ def get_sentiment_by_post_id(post_id: int) -> Optional[Dict[str, Any]]:
         raise DatabaseOperationError(f"Failed to retrieve sentiment: {e}")
 
 
+def insert_comment(
+    post_id: int,
+    author: str,
+    content: str,
+    timestamp: datetime,
+    sentiment: Optional[str] = None,
+    raw_data: Optional[Dict] = None
+) -> int:
+    """
+    Insert a comment into the database.
+    
+    Args:
+        post_id: Database ID of the parent post
+        author: Comment author username
+        content: Comment text
+        timestamp: Comment creation timestamp
+        sentiment: Optional sentiment label
+        raw_data: Raw JSON data
+        
+    Returns:
+        int: Database ID of the inserted comment
+        
+    Raises:
+        DatabaseOperationError: If the operation fails
+    """
+    db = get_db_connection()
+    
+    query = """
+        INSERT INTO comments (
+            post_id, author, content, timestamp, sentiment, raw_data
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s
+        )
+        RETURNING id;
+    """
+    
+    try:
+        with db.get_cursor(commit=True) as cursor:
+            cursor.execute(
+                query,
+                (
+                    post_id, author, content, timestamp, sentiment,
+                    psycopg2.extras.Json(raw_data) if raw_data else None
+                )
+            )
+            result = cursor.fetchone()
+            return result[0]
+            
+    except (DatabaseError, IntegrityError) as e:
+        logger.error(f"Failed to insert comment for post {post_id}: {e}")
+        raise DatabaseOperationError(f"Failed to insert comment: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error inserting comment for post {post_id}: {e}")
+        raise DatabaseOperationError(f"Unexpected error: {e}")
+
+
+def get_comments_by_post_id(post_id: int) -> List[Dict[str, Any]]:
+    """
+    Retrieve all comments for a specific post.
+    
+    Args:
+        post_id: Database ID of the post
+        
+    Returns:
+        List of comment dictionaries ordered by timestamp
+    """
+    db = get_db_connection()
+    
+    query = """
+        SELECT * FROM comments 
+        WHERE post_id = %s 
+        ORDER BY timestamp ASC;
+    """
+    
+    try:
+        with db.get_cursor() as cursor:
+            cursor.execute(query, (post_id,))
+            results = cursor.fetchall()
+            
+            columns = [desc[0] for desc in cursor.description]
+            return [dict(zip(columns, row)) for row in results]
+            
+    except DatabaseError as e:
+        logger.error(f"Failed to retrieve comments for post {post_id}: {e}")
+        raise DatabaseOperationError(f"Failed to retrieve comments: {e}")
+
+
+
 def get_posts_with_sentiment(
     start_date: datetime,
     end_date: datetime,
@@ -829,3 +917,384 @@ def delete_old_execution_logs(days: int = 30) -> int:
     except DatabaseError as e:
         logger.error(f"Failed to delete old execution logs: {e}")
         raise DatabaseOperationError(f"Failed to delete old execution logs: {e}")
+
+
+def get_hashtag_frequency(
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    platform: Optional[str] = None,
+    limit: int = 20
+) -> List[Dict[str, Any]]:
+    """
+    Get hashtag frequency counts from post captions.
+    
+    Extracts hashtags from the content field and returns the most frequent ones.
+    
+    Args:
+        start_date: Optional start of date range (inclusive)
+        end_date: Optional end of date range (inclusive)
+        platform: Optional platform filter
+        limit: Maximum number of hashtags to return (default 20)
+        
+    Returns:
+        List of dictionaries with 'hashtag' and 'count' keys, ordered by count descending
+        Example: [{"hashtag": "instagram", "count": 150}, {"hashtag": "photo", "count": 120}]
+        
+    Raises:
+        DatabaseOperationError: If the query fails
+        
+    Validates: Requirements 6.1, 6.5
+    """
+    db = get_db_connection()
+    
+    # Build WHERE clause based on filters
+    conditions = []
+    params = []
+    
+    if start_date:
+        conditions.append("timestamp >= %s")
+        params.append(start_date)
+    
+    if end_date:
+        conditions.append("timestamp <= %s")
+        params.append(end_date)
+    
+    if platform:
+        conditions.append("platform = %s")
+        params.append(platform)
+    
+    where_clause = " AND ".join(conditions) if conditions else "1=1"
+    params.append(limit)
+    
+    # Query to extract hashtags from content using regex
+    # This uses PostgreSQL's regexp_matches to find all hashtags in the content
+    query = f"""
+        SELECT 
+            LOWER(REGEXP_REPLACE(hashtag, '^#', '')) as hashtag,
+            COUNT(*) as count
+        FROM (
+            SELECT UNNEST(REGEXP_MATCHES(content, '#(\\w+)', 'g')) as hashtag
+            FROM posts
+            WHERE {where_clause} AND content IS NOT NULL
+        ) hashtags
+        GROUP BY LOWER(REGEXP_REPLACE(hashtag, '^#', ''))
+        ORDER BY count DESC
+        LIMIT %s;
+    """
+    
+    try:
+        with db.get_cursor() as cursor:
+            cursor.execute(query, tuple(params))
+            results = cursor.fetchall()
+            
+            return [{"hashtag": row[0], "count": row[1]} for row in results]
+            
+    except DatabaseError as e:
+        logger.error(f"Failed to get hashtag frequency: {e}")
+        raise DatabaseOperationError(f"Failed to get hashtag frequency: {e}")
+
+
+def get_posting_time_heatmap(
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    platform: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Get posting patterns by day of week and hour of day.
+    
+    Returns a heatmap data structure showing when posts are most frequently made.
+    
+    Args:
+        start_date: Optional start of date range (inclusive)
+        end_date: Optional end of date range (inclusive)
+        platform: Optional platform filter
+        
+    Returns:
+        List of dictionaries with 'day_of_week', 'hour', and 'count' keys
+        day_of_week: 0=Sunday, 1=Monday, ..., 6=Saturday
+        hour: 0-23
+        Example: [{"day_of_week": 1, "hour": 14, "count": 25}, ...]
+        
+    Raises:
+        DatabaseOperationError: If the query fails
+        
+    Validates: Requirements 6.2, 6.6
+    """
+    db = get_db_connection()
+    
+    # Build WHERE clause based on filters
+    conditions = []
+    params = []
+    
+    if start_date:
+        conditions.append("timestamp >= %s")
+        params.append(start_date)
+    
+    if end_date:
+        conditions.append("timestamp <= %s")
+        params.append(end_date)
+    
+    if platform:
+        conditions.append("platform = %s")
+        params.append(platform)
+    
+    where_clause = " AND ".join(conditions) if conditions else "1=1"
+    
+    # Query to group posts by day of week and hour
+    # EXTRACT(DOW FROM timestamp) returns 0=Sunday, 1=Monday, etc.
+    # EXTRACT(HOUR FROM timestamp) returns 0-23
+    query = f"""
+        SELECT 
+            EXTRACT(DOW FROM timestamp)::INTEGER as day_of_week,
+            EXTRACT(HOUR FROM timestamp)::INTEGER as hour,
+            COUNT(*) as count
+        FROM posts
+        WHERE {where_clause}
+        GROUP BY day_of_week, hour
+        ORDER BY day_of_week, hour;
+    """
+    
+    try:
+        with db.get_cursor() as cursor:
+            cursor.execute(query, tuple(params))
+            results = cursor.fetchall()
+            
+            return [
+                {
+                    "day_of_week": row[0],
+                    "hour": row[1],
+                    "count": row[2]
+                }
+                for row in results
+            ]
+            
+    except DatabaseError as e:
+        logger.error(f"Failed to get posting time heatmap: {e}")
+        raise DatabaseOperationError(f"Failed to get posting time heatmap: {e}")
+
+
+def search_posts(
+    search_term: Optional[str] = None,
+    filters: Optional[Dict[str, Any]] = None,
+    page: int = 1,
+    per_page: int = 25
+) -> Dict[str, Any]:
+    """
+    Search and filter posts with pagination.
+    
+    Supports full-text search on content and author fields, plus various filters.
+    
+    Args:
+        search_term: Optional search term to match in content or author (case-insensitive)
+        filters: Optional dictionary of filters:
+            - start_date: datetime - Start of date range
+            - end_date: datetime - End of date range
+            - platform: str - Platform filter
+            - media_type: str - Media type filter
+            - sentiment_label: str - Sentiment label filter (positive, neutral, negative)
+            - min_likes: int - Minimum likes
+            - max_likes: int - Maximum likes
+            - sort_by: str - Column to sort by (default: timestamp)
+            - sort_order: str - Sort order: 'asc' or 'desc' (default: desc)
+        page: Page number (1-indexed)
+        per_page: Number of results per page
+        
+    Returns:
+        Dictionary with:
+            - posts: List of post dictionaries with sentiment data
+            - total: Total number of matching posts
+            - page: Current page number
+            - per_page: Results per page
+            - total_pages: Total number of pages
+        
+    Raises:
+        DatabaseOperationError: If the query fails
+        
+    Validates: Requirements 7.1, 7.2, 7.3, 7.4, 7.6, 7.7, 15.1, 15.2, 15.3
+    """
+    db = get_db_connection()
+    
+    if filters is None:
+        filters = {}
+    
+    # Build WHERE clause based on search and filters
+    conditions = []
+    params = []
+    
+    # Search term (case-insensitive search in content and author)
+    if search_term:
+        conditions.append("(LOWER(p.content) LIKE LOWER(%s) OR LOWER(p.author) LIKE LOWER(%s))")
+        search_pattern = f"%{search_term}%"
+        params.extend([search_pattern, search_pattern])
+    
+    # Date range filters
+    if filters.get('start_date'):
+        conditions.append("p.timestamp >= %s")
+        params.append(filters['start_date'])
+    
+    if filters.get('end_date'):
+        conditions.append("p.timestamp <= %s")
+        params.append(filters['end_date'])
+    
+    # Platform filter
+    if filters.get('platform'):
+        conditions.append("p.platform = %s")
+        params.append(filters['platform'])
+    
+    # Media type filter
+    if filters.get('media_type'):
+        conditions.append("p.media_type = %s")
+        params.append(filters['media_type'])
+    
+    # Sentiment label filter
+    if filters.get('sentiment_label'):
+        conditions.append("s.label = %s")
+        params.append(filters['sentiment_label'])
+    
+    # Likes range filters
+    if filters.get('min_likes') is not None:
+        conditions.append("p.likes >= %s")
+        params.append(filters['min_likes'])
+    
+    if filters.get('max_likes') is not None:
+        conditions.append("p.likes <= %s")
+        params.append(filters['max_likes'])
+    
+    where_clause = " AND ".join(conditions) if conditions else "1=1"
+    
+    # Sorting
+    sort_by = filters.get('sort_by', 'timestamp')
+    sort_order = filters.get('sort_order', 'desc').upper()
+    
+    # Validate sort_by to prevent SQL injection
+    valid_sort_columns = [
+        'timestamp', 'likes', 'comments_count', 'shares', 'author',
+        'platform', 'media_type', 'score', 'label'
+    ]
+    if sort_by not in valid_sort_columns:
+        sort_by = 'timestamp'
+    
+    # Validate sort_order
+    if sort_order not in ['ASC', 'DESC']:
+        sort_order = 'DESC'
+    
+    # Add table prefix for sorting
+    if sort_by in ['score', 'label']:
+        sort_column = f"s.{sort_by}"
+    else:
+        sort_column = f"p.{sort_by}"
+    
+    # Calculate offset for pagination
+    offset = (page - 1) * per_page
+    
+    # Count query
+    count_query = f"""
+        SELECT COUNT(DISTINCT p.id)
+        FROM posts p
+        LEFT JOIN sentiments s ON p.id = s.post_id
+        WHERE {where_clause};
+    """
+    
+    # Data query with pagination
+    data_query = f"""
+        SELECT 
+            p.*,
+            s.score, s.label, s.confidence, s.compound,
+            s.positive, s.neutral, s.negative, s.model,
+            s.processed_at
+        FROM posts p
+        LEFT JOIN sentiments s ON p.id = s.post_id
+        WHERE {where_clause}
+        ORDER BY {sort_column} {sort_order}
+        LIMIT %s OFFSET %s;
+    """
+    
+    try:
+        with db.get_cursor() as cursor:
+            # Get total count
+            cursor.execute(count_query, tuple(params))
+            total = cursor.fetchone()[0]
+            
+            # Get paginated data
+            cursor.execute(data_query, tuple(params + [per_page, offset]))
+            results = cursor.fetchall()
+            
+            columns = [desc[0] for desc in cursor.description]
+            posts = [dict(zip(columns, row)) for row in results]
+            
+            # Calculate total pages
+            total_pages = (total + per_page - 1) // per_page if total > 0 else 0
+            
+            return {
+                'posts': posts,
+                'total': total,
+                'page': page,
+                'per_page': per_page,
+                'total_pages': total_pages
+            }
+            
+    except DatabaseError as e:
+        logger.error(f"Failed to search posts: {e}")
+        raise DatabaseOperationError(f"Failed to search posts: {e}")
+
+
+def clear_all_data() -> Dict[str, int]:
+    """
+    Clear all data from the database (TRUNCATE all tables).
+    
+    This will delete all posts, sentiments, comments, and execution logs.
+    Use with caution! This operation cannot be undone.
+    
+    Returns:
+        Dict with counts of deleted records per table
+        
+    Raises:
+        DatabaseOperationError: If the operation fails
+    """
+    db = get_db_connection()
+    
+    try:
+        counts = {}
+        
+        with db.get_cursor(commit=True) as cursor:
+            # Get counts before deletion
+            cursor.execute("SELECT COUNT(*) FROM comments")
+            counts['comments'] = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM sentiments")
+            counts['sentiments'] = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM posts")
+            counts['posts'] = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM execution_logs")
+            counts['execution_logs'] = cursor.fetchone()[0]
+            
+            # Truncate tables in correct order (child tables first)
+            # CASCADE will automatically delete related records
+            cursor.execute("TRUNCATE TABLE comments CASCADE")
+            cursor.execute("TRUNCATE TABLE sentiments CASCADE")
+            cursor.execute("TRUNCATE TABLE posts CASCADE")
+            cursor.execute("TRUNCATE TABLE execution_logs CASCADE")
+            
+            # Reset sequences to start from 1
+            cursor.execute("ALTER SEQUENCE comments_id_seq RESTART WITH 1")
+            cursor.execute("ALTER SEQUENCE sentiments_id_seq RESTART WITH 1")
+            cursor.execute("ALTER SEQUENCE posts_id_seq RESTART WITH 1")
+            cursor.execute("ALTER SEQUENCE execution_logs_id_seq RESTART WITH 1")
+        
+        logger.warning(
+            f"Database cleared: {counts['posts']} posts, "
+            f"{counts['sentiments']} sentiments, "
+            f"{counts['comments']} comments, "
+            f"{counts['execution_logs']} execution logs"
+        )
+        
+        return counts
+        
+    except DatabaseError as e:
+        logger.error(f"Failed to clear database: {e}")
+        raise DatabaseOperationError(f"Failed to clear database: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error clearing database: {e}")
+        raise DatabaseOperationError(f"Unexpected error: {e}")

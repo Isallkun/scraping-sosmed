@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Page Header -->
+    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+            <h2 class="text-2xl font-bold text-gray-900 dark:text-white">Sentiment Analysis</h2>
+            <p class="text-gray-600 dark:text-gray-400 mt-1">Emotional tone analysis of Instagram content</p>
+        </div>
+        
+        <!-- Date Range Filter -->
+        <div class="flex items-center space-x-3">
+            <div class="flex items-center space-x-2">
+                <label class="form-label mb-0 text-sm">From:</label>
+                <input type="date" id="start-date" class="form-input text-sm py-1.5">
+            </div>
+            <div class="flex items-center space-x-2">
+                <label class="form-label mb-0 text-sm">To:</label>
+                <input type="date" id="end-date" class="form-input text-sm py-1.5">
+            </div>
+            <button id="apply-filter" class="btn-primary btn-sm">
+                <span class="material-symbols-outlined">filter_alt</span>
+                <span>Apply</span>
+            </button>
+        </div>
+    </div>
+    
+    <!-- Sentiment Summary Cards -->
+    <div class="grid-responsive">
+        <!-- Positive Sentiment Card -->
+        <div class="card">
+            <div class="flex items-center justify-between">
+                <div class="flex-1">
+                    <div class="text-3xl font-bold text-green-600 dark:text-green-400" id="positive-count">-</div>
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Positive Posts</div>
+                    <div class="text-xs text-gray-500 dark:text-gray-500 mt-1" id="positive-percent">-</div>
+                    <div class="progress-bar mt-3">
+                        <div id="positive-progress" class="progress-bar-fill bg-green-600" style="width: 0%"></div>
+                    </div>
+                </div>
+                <span class="material-symbols-outlined text-green-600 dark:text-green-400 text-5xl">
+                    sentiment_very_satisfied
+                </span>
+            </div>
+        </div>
+        
+        <!-- Neutral Sentiment Card -->
+        <div class="card">
+            <div class="flex items-center justify-between">
+                <div class="flex-1">
+                    <div class="text-3xl font-bold text-gray-600 dark:text-gray-400" id="neutral-count">-</div>
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Neutral Posts</div>
+                    <div class="text-xs text-gray-500 dark:text-gray-500 mt-1" id="neutral-percent">-</div>
+                    <div class="progress-bar mt-3">
+                        <div id="neutral-progress" class="progress-bar-fill bg-gray-600" style="width: 0%"></div>
+                    </div>
+                </div>
+                <span class="material-symbols-outlined text-gray-600 dark:text-gray-400 text-5xl">
+                    sentiment_neutral
+                </span>
+            </div>
+        </div>
+        
+        <!-- Negative Sentiment Card -->
+        <div class="card">
+            <div class="flex items-center justify-between">
+                <div class="flex-1">
+                    <div class="text-3xl font-bold text-red-600 dark:text-red-400" id="negative-count">-</div>
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Negative Posts</div>
+                    <div class="text-xs text-gray-500 dark:text-gray-500 mt-1" id="negative-percent">-</div>
+                    <div class="progress-bar mt-3">
+                        <div id="negative-progress" class="progress-bar-fill bg-red-600" style="width: 0%"></div>
+                    </div>
+                </div>
+                <span class="material-symbols-outlined text-red-600 dark:text-red-400 text-5xl">
+                    sentiment_dissatisfied
+                </span>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Charts Row -->
+    <div class="grid-responsive-2">
+        <!-- Sentiment Distribution Pie Chart -->
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <span class="material-symbols-outlined">pie_chart</span>
+                    <span>Sentiment Distribution</span>
+                </h3>
+            </div>
+            <div class="chart-container" style="height: 300px;">
+                <canvas id="sentiment-pie-chart"></canvas>
+            </div>
+        </div>
+        
+        <!-- Average Sentiment Gauge -->
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <span class="material-symbols-outlined">speed</span>
+                    <span>Average Sentiment Score</span>
+                </h3>
+            </div>
+            <div class="flex flex-col items-center justify-center py-8">
+                <div class="text-6xl font-bold" id="gauge-value">0.000</div>
+                <div class="text-sm text-gray-600 dark:text-gray-400 mt-2">Sentiment Score</div>
+                <div id="gauge-label" class="mt-4"></div>
+                <div class="w-full max-w-xs mt-6">
+                    <div class="flex justify-between text-xs text-gray-600 dark:text-gray-400 mb-2">
+                        <span>Negative</span>
+                        <span>Neutral</span>
+                        <span>Positive</span>
+                    </div>
+                    <div class="h-3 rounded-full bg-gradient-to-r from-red-500 via-gray-400 to-green-500"></div>
+                    <div class="relative h-6">
+                        <div id="gauge-indicator" class="absolute w-0.5 h-6 bg-gray-900 dark:bg-white" style="left: 50%; transform: translateX(-50%)"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Sentiment Trends Over Time -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">
+                <span class="material-symbols-outlined">show_chart</span>
+                <span>Sentiment Trends Over Time</span>
+            </h3>
+        </div>
+        <div class="chart-container" style="height: 350px;">
+            <canvas id="sentiment-trend-chart"></canvas>
+        </div>
+    </div>
+    
+    <!-- Sentiment by Post Type -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">
+                <span class="material-symbols-outlined">bar_chart</span>
+                <span>Sentiment by Post Type</span>
+            </h3>
+        </div>
+        <div class="chart-container" style="height: 300px;">
+            <canvas id="sentiment-by-type-chart"></canvas>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/sentiment.js') }}"></script>
+{% endblock %}

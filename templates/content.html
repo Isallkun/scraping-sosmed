@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Page Header -->
+    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+            <h2 class="text-2xl font-bold text-gray-900 dark:text-white">Content Analysis</h2>
+            <p class="text-gray-600 dark:text-gray-400 mt-1">Analyze posting patterns and content characteristics</p>
+        </div>
+        
+        <!-- Date Range Filter -->
+        <div class="flex items-center space-x-3">
+            <div class="flex items-center space-x-2">
+                <label class="form-label mb-0 text-sm">From:</label>
+                <input type="date" id="start-date" class="form-input text-sm py-1.5">
+            </div>
+            <div class="flex items-center space-x-2">
+                <label class="form-label mb-0 text-sm">To:</label>
+                <input type="date" id="end-date" class="form-input text-sm py-1.5">
+            </div>
+            <button id="apply-filter" class="btn-primary btn-sm">
+                <span class="material-symbols-outlined">filter_alt</span>
+                <span>Apply</span>
+            </button>
+        </div>
+    </div>
+    
+    <!-- Content Summary Cards -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div class="card text-center">
+            <div class="text-2xl font-bold text-primary-600 dark:text-primary-400" id="total-hashtags">-</div>
+            <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Unique Hashtags</div>
+        </div>
+        <div class="card text-center">
+            <div class="text-2xl font-bold text-blue-600 dark:text-blue-400" id="avg-caption-length">-</div>
+            <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Avg Caption Length</div>
+        </div>
+        <div class="card text-center">
+            <div class="text-2xl font-bold text-green-600 dark:text-green-400" id="most-active-day">-</div>
+            <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Most Active Day</div>
+        </div>
+        <div class="card text-center">
+            <div class="text-2xl font-bold text-purple-600 dark:text-purple-400" id="most-active-hour">-</div>
+            <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Most Active Hour</div>
+        </div>
+    </div>
+    
+    <!-- Top Hashtags -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">
+                <span class="material-symbols-outlined">tag</span>
+                <span>Top 20 Hashtags</span>
+            </h3>
+        </div>
+        <div class="chart-container" style="height: 400px;">
+            <canvas id="hashtags-chart"></canvas>
+        </div>
+    </div>
+    
+    <!-- Posting Heatmap -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">
+                <span class="material-symbols-outlined">calendar_month</span>
+                <span>Posting Patterns by Day and Hour</span>
+            </h3>
+            <p class="card-subtitle">Darker colors indicate more posts</p>
+        </div>
+        <div id="heatmap-container" class="overflow-x-auto">
+            <!-- Heatmap will be generated here -->
+        </div>
+    </div>
+    
+    <!-- Content Length Distribution -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">
+                <span class="material-symbols-outlined">bar_chart</span>
+                <span>Caption Length Distribution</span>
+            </h3>
+        </div>
+        <div class="chart-container" style="height: 300px;">
+            <canvas id="length-distribution-chart"></canvas>
+        </div>
+    </div>
+    
+    <!-- Top Keywords -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">
+                <span class="material-symbols-outlined">text_fields</span>
+                <span>Most Common Keywords</span>
+            </h3>
+        </div>
+        <div class="chart-container" style="height: 300px;">
+            <canvas id="keywords-chart"></canvas>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/content.js') }}"></script>
+{% endblock %}

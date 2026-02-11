@@ -35,6 +35,11 @@ class Config:
     DB_USER = os.getenv('DB_USER', 'postgres')
     DB_PASSWORD = os.getenv('DB_PASSWORD', '')
     
+    # Database connection pooling configuration
+    DB_POOL_MIN_CONN = int(os.getenv('DB_POOL_MIN_CONN', '2'))
+    DB_POOL_MAX_CONN = int(os.getenv('DB_POOL_MAX_CONN', '10'))
+    DB_CONNECT_TIMEOUT = int(os.getenv('DB_CONNECT_TIMEOUT', '10'))
+    
     # Cache configuration
     CACHE_TYPE = os.getenv('CACHE_TYPE', 'simple')  # 'simple' for dev, 'redis' for production
     CACHE_DEFAULT_TIMEOUT = int(os.getenv('CACHE_TIMEOUT', '300'))  # 5 minutes
@@ -43,6 +48,7 @@ class Config:
     # Dashboard configuration
     AUTO_REFRESH_INTERVAL = int(os.getenv('AUTO_REFRESH_INTERVAL', '30'))  # seconds
     POSTS_PER_PAGE = int(os.getenv('POSTS_PER_PAGE', '25'))
+    TEMPLATES_AUTO_RELOAD = True
     
     # CORS configuration
     CORS_ORIGINS = os.getenv('CORS_ORIGINS', '*')

@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Page Header -->
+    <div class="flex items-center justify-between">
+        <div>
+            <h2 class="text-2xl font-bold text-gray-900 dark:text-white">Dashboard Overview</h2>
+            <p class="text-gray-600 dark:text-gray-400 mt-1">Key metrics and recent activity</p>
+        </div>
+        
+        <!-- Auto-refresh Toggle -->
+        <div class="flex items-center space-x-3">
+            <label class="flex items-center space-x-2 cursor-pointer">
+                <input type="checkbox" id="auto-refresh-toggle" class="form-checkbox h-5 w-5 text-primary-600 rounded">
+                <span class="text-sm text-gray-700 dark:text-gray-300">Auto-refresh</span>
+            </label>
+            <button id="refresh-button" class="btn-outline btn-sm">
+                <span class="material-symbols-outlined">refresh</span>
+                <span>Refresh</span>
+            </button>
+        </div>
+    </div>
+    
+    <!-- Summary Metrics Cards -->
+    <div class="grid-responsive">
+        <!-- Total Posts Card -->
+        <div class="metric-card">
+            <div class="flex items-center justify-between">
+                <div>
+                    <div class="metric-value" id="total-posts">-</div>
+                    <div class="metric-label">Total Posts</div>
+                </div>
+                <span class="material-symbols-outlined text-primary-600 dark:text-primary-400 text-5xl">
+                    article
+                </span>
+            </div>
+        </div>
+        
+        <!-- Total Comments Card -->
+        <div class="metric-card">
+            <div class="flex items-center justify-between">
+                <div>
+                    <div class="metric-value" id="total-comments">-</div>
+                    <div class="metric-label">Total Comments</div>
+                </div>
+                <span class="material-symbols-outlined text-blue-600 dark:text-blue-400 text-5xl">
+                    comment
+                </span>
+            </div>
+        </div>
+        
+        <!-- Average Sentiment Card -->
+        <div class="metric-card">
+            <div class="flex items-center justify-between">
+                <div>
+                    <div class="metric-value" id="avg-sentiment">-</div>
+                    <div class="metric-label">Average Sentiment</div>
+                    <div id="sentiment-badge" class="mt-2"></div>
+                </div>
+                <span class="material-symbols-outlined text-green-600 dark:text-green-400 text-5xl">
+                    sentiment_satisfied
+                </span>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Last Execution and Post Type Distribution -->
+    <div class="grid-responsive-2">
+        <!-- Last Execution Card -->
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <span class="material-symbols-outlined">schedule</span>
+                    <span>Last Scraping Execution</span>
+                </h3>
+            </div>
+            <div class="space-y-3">
+                <div class="flex justify-between items-center">
+                    <span class="text-gray-600 dark:text-gray-400">Execution Time:</span>
+                    <span class="font-medium text-gray-900 dark:text-white" id="last-execution-time">-</span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span class="text-gray-600 dark:text-gray-400">Posts Scraped:</span>
+                    <span class="font-medium text-gray-900 dark:text-white" id="posts-scraped">-</span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span class="text-gray-600 dark:text-gray-400">Status:</span>
+                    <span id="execution-status" class="badge badge-success">-</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Post Type Distribution Card -->
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <span class="material-symbols-outlined">pie_chart</span>
+                    <span>Post Type Distribution</span>
+                </h3>
+            </div>
+            <div class="chart-container" style="height: 250px;">
+                <canvas id="post-type-chart"></canvas>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Recent Activity Timeline -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">
+                <span class="material-symbols-outlined">timeline</span>
+                <span>Activity Over Time</span>
+            </h3>
+        </div>
+        <div class="chart-container" style="height: 300px;">
+            <canvas id="activity-timeline-chart"></canvas>
+        </div>
+    </div>
+    
+    <!-- Quick Stats Grid -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div class="card text-center">
+            <div class="text-2xl font-bold text-primary-600 dark:text-primary-400" id="avg-likes">-</div>
+            <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Avg Likes</div>
+        </div>
+        <div class="card text-center">
+            <div class="text-2xl font-bold text-blue-600 dark:text-blue-400" id="avg-comments">-</div>
+            <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Avg Comments</div>
+        </div>
+        <div class="card text-center">
+            <div class="text-2xl font-bold text-green-600 dark:text-green-400" id="engagement-rate">-</div>
+            <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Engagement Rate</div>
+        </div>
+        <div class="card text-center">
+            <div class="text-2xl font-bold text-purple-600 dark:text-purple-400" id="total-reach">-</div>
+            <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Total Reach</div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Pass Flask config to JavaScript (must be before home.js)
+    const AUTO_REFRESH_INTERVAL = {{ refresh_interval }};
+</script>
+<script src="{{ url_for('static', filename='js/home.js') }}"></script>
+{% endblock %}

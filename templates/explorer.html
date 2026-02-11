@@ -1,0 +1,328 @@
+{% extends "base.html" %} {% block content %}
+<div class="space-y-6">
+  <!-- Page Header -->
+  <div class="flex items-center justify-between">
+    <div>
+      <h2 class="text-2xl font-bold text-gray-900 dark:text-white">
+        Data Explorer
+      </h2>
+      <p class="text-gray-600 dark:text-gray-400 mt-1">
+        Search, filter, and export post data
+      </p>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="flex space-x-2">
+      <input type="file" id="import-file" class="hidden" accept=".csv,.json" />
+      <button id="import-button" class="btn-secondary">
+        <span class="material-symbols-outlined">upload</span>
+        <span>Import Data</span>
+      </button>
+      <button id="export-button" class="btn-primary">
+        <span class="material-symbols-outlined">download</span>
+        <span>Export CSV</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Search and Filters -->
+  <div class="card">
+    <div class="space-y-4">
+      <!-- Search Bar -->
+      <div class="flex items-center space-x-3">
+        <div class="flex-1">
+          <div class="relative">
+            <span
+              class="material-symbols-outlined absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"
+            >
+              search
+            </span>
+            <input
+              type="text"
+              id="search-input"
+              placeholder="Search by caption or author..."
+              class="form-input pl-10"
+            />
+          </div>
+        </div>
+        <button id="search-button" class="btn-primary">
+          <span>Search</span>
+        </button>
+        <button id="clear-button" class="btn-secondary">
+          <span>Clear</span>
+        </button>
+      </div>
+
+      <!-- Filters Row -->
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <!-- Date Range -->
+        <div>
+          <label class="form-label">From Date</label>
+          <input type="date" id="filter-start-date" class="form-input" />
+        </div>
+        <div>
+          <label class="form-label">To Date</label>
+          <input type="date" id="filter-end-date" class="form-input" />
+        </div>
+
+        <!-- Post Type -->
+        <div>
+          <label class="form-label">Post Type</label>
+          <select id="filter-post-type" class="form-select">
+            <option value="">All Types</option>
+            <option value="post">Post</option>
+            <option value="reel">Reel</option>
+          </select>
+        </div>
+
+        <!-- Sentiment -->
+        <div>
+          <label class="form-label">Sentiment</label>
+          <select id="filter-sentiment" class="form-select">
+            <option value="">All Sentiments</option>
+            <option value="positive">Positive</option>
+            <option value="neutral">Neutral</option>
+            <option value="negative">Negative</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Apply Filters Button -->
+      <div class="flex justify-end">
+        <button id="apply-filters-button" class="btn-primary">
+          <span class="material-symbols-outlined">filter_alt</span>
+          <span>Apply Filters</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Results Summary -->
+  <div class="flex items-center justify-between">
+    <div class="text-sm text-gray-600 dark:text-gray-400">
+      Showing <span id="results-start" class="font-medium">0</span> to
+      <span id="results-end" class="font-medium">0</span> of
+      <span id="results-total" class="font-medium">0</span> posts
+    </div>
+
+    <!-- Per Page Selector -->
+    <div class="flex items-center space-x-2">
+      <label class="text-sm text-gray-600 dark:text-gray-400"
+        >Posts per page:</label
+      >
+      <select id="per-page-select" class="form-select text-sm py-1.5">
+        <option value="10">10</option>
+        <option value="25" selected>25</option>
+        <option value="50">50</option>
+        <option value="100">100</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Data Table -->
+  <div class="card">
+    <div class="overflow-x-auto">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th class="sortable" data-sort="author">
+              <div class="flex items-center space-x-1">
+                <span>Author</span>
+                <span class="material-symbols-outlined text-sm"
+                  >unfold_more</span
+                >
+              </div>
+            </th>
+            <th class="sortable" data-sort="caption">
+              <div class="flex items-center space-x-1">
+                <span>Caption</span>
+                <span class="material-symbols-outlined text-sm"
+                  >unfold_more</span
+                >
+              </div>
+            </th>
+            <th class="sortable text-right" data-sort="likes">
+              <div class="flex items-center justify-end space-x-1">
+                <span>Likes</span>
+                <span class="material-symbols-outlined text-sm"
+                  >unfold_more</span
+                >
+              </div>
+            </th>
+            <th class="sortable text-right" data-sort="comments">
+              <div class="flex items-center justify-end space-x-1">
+                <span>Comments</span>
+                <span class="material-symbols-outlined text-sm"
+                  >unfold_more</span
+                >
+              </div>
+            </th>
+            <th class="sortable text-center" data-sort="sentiment">
+              <div class="flex items-center justify-center space-x-1">
+                <span>Sentiment</span>
+                <span class="material-symbols-outlined text-sm"
+                  >unfold_more</span
+                >
+              </div>
+            </th>
+            <th class="text-center">Post Type</th>
+            <th class="sortable" data-sort="timestamp">
+              <div class="flex items-center space-x-1">
+                <span>Date</span>
+                <span class="material-symbols-outlined text-sm"
+                  >unfold_more</span
+                >
+              </div>
+            </th>
+          </tr>
+        </thead>
+        <tbody id="data-table-body">
+          <tr>
+            <td colspan="7" class="text-center py-8 text-gray-500">
+              Loading...
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Pagination -->
+  <div class="flex items-center justify-between">
+    <div class="text-sm text-gray-600 dark:text-gray-400">
+      Page <span id="current-page" class="font-medium">1</span> of
+      <span id="total-pages" class="font-medium">1</span>
+    </div>
+
+    <div class="pagination">
+      <button id="first-page" class="pagination-button">
+        <span class="material-symbols-outlined text-sm">first_page</span>
+      </button>
+      <button id="prev-page" class="pagination-button">
+        <span class="material-symbols-outlined text-sm">chevron_left</span>
+      </button>
+
+      <div id="page-numbers" class="flex items-center space-x-2">
+        <!-- Page numbers will be inserted here -->
+      </div>
+
+      <button id="next-page" class="pagination-button">
+        <span class="material-symbols-outlined text-sm">chevron_right</span>
+      </button>
+      <button id="last-page" class="pagination-button">
+        <span class="material-symbols-outlined text-sm">last_page</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Import Modal -->
+<div
+  id="import-modal"
+  class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50"
+>
+  <div
+    class="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md mx-4"
+  >
+    <div
+      class="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center"
+    >
+      <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+        Import Data
+      </h3>
+      <button
+        id="close-import-modal"
+        class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+      >
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+    <div class="p-6 space-y-4">
+      <!-- File Input -->
+      <div>
+        <label class="form-label">Select File</label>
+        <input
+          type="file"
+          id="import-file-input"
+          class="form-input"
+          accept=".csv,.json"
+        />
+        <p class="text-xs text-gray-500 mt-1">Supported formats: JSON, CSV</p>
+      </div>
+
+      <!-- Clear Existing Checkbox -->
+      <div
+        class="flex items-start space-x-3 p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800"
+      >
+        <input
+          type="checkbox"
+          id="clear-existing-checkbox"
+          checked
+          class="mt-1 w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+        />
+        <div class="flex-1">
+          <label
+            for="clear-existing-checkbox"
+            class="font-medium text-gray-900 dark:text-white cursor-pointer"
+          >
+            Replace all existing data
+          </label>
+          <p class="text-xs text-gray-600 dark:text-gray-400 mt-1">
+            ⚠️ If checked, all current posts, comments, and sentiments will be
+            deleted before importing new data. Uncheck to append data instead.
+          </p>
+        </div>
+      </div>
+
+      <!-- Platform Selection -->
+      <div>
+        <label class="form-label">Platform</label>
+        <select id="import-platform-select" class="form-select">
+          <option value="instagram">Instagram</option>
+          <option value="facebook">Facebook</option>
+          <option value="twitter">Twitter</option>
+        </select>
+      </div>
+
+      <!-- Import Button -->
+      <div class="flex justify-end space-x-2 pt-4">
+        <button id="cancel-import-button" class="btn-secondary">Cancel</button>
+        <button id="confirm-import-button" class="btn-primary">
+          <span class="material-symbols-outlined">upload</span>
+          <span>Import</span>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Comments Modal -->
+<div
+  id="comments-modal"
+  class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50"
+>
+  <div
+    class="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl mx-4 flex flex-col max-h-[80vh]"
+  >
+    <div
+      class="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center"
+    >
+      <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+        Post Comments
+      </h3>
+      <button
+        id="close-comments-modal"
+        class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+      >
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+    <div class="p-4 overflow-y-auto flex-1" id="comments-list">
+      <!-- Comments will be injected here -->
+      <div class="text-center py-8 text-gray-500">Loading comments...</div>
+    </div>
+  </div>
+</div>
+{% endblock %} {% block scripts %}
+<script src="{{ url_for('static', filename='js/explorer.js') }}"></script>
+{% endblock %}
