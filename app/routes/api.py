@@ -591,12 +591,16 @@ def import_data():
         logger.info(f"POST /api/import file={filename} type={file_type} platform={platform} clear_existing={clear_existing}")
         
         result = process_import_file(file, file_type, platform, clear_existing)
-        
+
+        # Clear cache so fresh data is served immediately
+        cache.clear()
+        logger.info("Cache cleared after import")
+
         # Build response message
         message = 'Import completed successfully'
         if clear_existing and 'cleared' in result:
             message += f" (Cleared {result['cleared']['posts']} existing posts first)"
-        
+
         return jsonify({
             'message': message,
             'stats': result
@@ -608,6 +612,119 @@ def import_data():
     except Exception as e:
         logger.error(f"Unexpected error in /api/import: {e}", exc_info=True)
         return create_error_response("Internal server error during import", 500)
+
+
+@api_bp.route('/scrape', methods=['POST'])
+def scrape_instagram():
+    """
+    Trigger Instagram scraping job.
+    
+    Form Data:
+        target_url: Instagram profile URL to scrape
+        limit: Number of posts to scrape (default: 5, max: 50)
+        scrape_comments: Whether to scrape comments (default: true)
+        run_sentiment: Whether to run sentiment analysis (default: true)
+        auto_import: Whether to auto-import to database (default: true)
+        clear_existing: Whether to clear existing data before import (default: true)
+    
+    Returns:
+        JSON response with scraping results and import statistics
+        
+    Status Codes:
+        200: Success
+        400: Invalid parameters
+        500: Internal server error
+    """
+    try:
+        from app.services.scraping_service import (
+            run_instagram_scrape,
+            import_scrape_results,
+            ScrapingServiceError
+        )
+        
+        # Get parameters
+        target_url = request.form.get('target_url')
+        if not target_url:
+            return create_error_response("target_url is required", 400)
+        
+        # Validate URL
+        if 'instagram.com' not in target_url:
+            return create_error_response("Invalid Instagram URL", 400)
+        
+        # Get optional parameters
+        try:
+            limit = int(request.form.get('limit', 5))
+            if limit < 1 or limit > 50:
+                return create_error_response("limit must be between 1 and 50", 400)
+        except ValueError:
+            return create_error_response("Invalid limit value", 400)
+        
+        scrape_comments = request.form.get('scrape_comments', 'true').lower() in ['true', '1', 'yes']
+        run_sentiment = request.form.get('run_sentiment', 'true').lower() in ['true', '1', 'yes']
+        auto_import = request.form.get('auto_import', 'true').lower() in ['true', '1', 'yes']
+        clear_existing = request.form.get('clear_existing', 'true').lower() in ['true', '1', 'yes']
+        
+        logger.info(
+            f"POST /api/scrape target={target_url} limit={limit} "
+            f"comments={scrape_comments} sentiment={run_sentiment} "
+            f"auto_import={auto_import} clear={clear_existing}"
+        )
+        
+        # Run scraping
+        scrape_result = run_instagram_scrape(
+            target_url=target_url,
+            limit=limit,
+            scrape_comments=scrape_comments,
+            run_sentiment=run_sentiment,
+            headless=True
+        )
+        
+        response_data = {
+            'status': 'success',
+            'scraping': {
+                'posts_scraped': scrape_result['posts_scraped'],
+                'output_file': scrape_result['output_file'],
+                'sentiment_run': scrape_result['sentiment_run']
+            }
+        }
+        
+        # Auto-import if requested
+        if auto_import:
+            # Use sentiment file if available, otherwise use scrape file
+            import_file = scrape_result.get('sentiment_file') or scrape_result['output_file']
+            
+            import_result = import_scrape_results(
+                file_path=import_file,
+                platform='instagram',
+                clear_existing=clear_existing
+            )
+            
+            response_data['import'] = import_result
+            
+            # Build message
+            message = f"Scraping completed! {scrape_result['posts_scraped']} posts scraped"
+            if scrape_result['sentiment_run']:
+                message += " with sentiment analysis"
+            if clear_existing and 'cleared' in import_result:
+                message += f" (Cleared {import_result['cleared']['posts']} existing posts)"
+        else:
+            message = f"Scraping completed! {scrape_result['posts_scraped']} posts scraped. Import manually from Data Explorer."
+        
+        response_data['message'] = message
+
+        # Clear cache so fresh data is served immediately
+        cache.clear()
+        logger.info("Cache cleared after scrape")
+
+        return jsonify(response_data), 200
+
+    except ScrapingServiceError as e:
+        logger.error(f"Scraping error: {e}")
+        return create_error_response(str(e), 400)
+    except Exception as e:
+        logger.error(f"Unexpected error in /api/scrape: {e}", exc_info=True)
+        return create_error_response("Internal server error during scraping", 500)
+
 
 
 # Error handler for blueprint

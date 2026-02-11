@@ -14,19 +14,19 @@ KEY FEATURES:
 
 2. **3-Strategy Comment Extraction**
    The scraper uses a robust fallback approach for extracting comments:
-   
-   Strategy 1: JSON Parsing (Fastest)
-   - Extracts from embedded _sharedData or __additionalDataLoaded
-   - Most reliable when available
-   - Limited to initially loaded comments
-   
-   Strategy 2: DOM Extraction (Most Comprehensive)
+
+   Strategy 1: Instagram REST API (Most Reliable)
+   - Calls Instagram's internal API using browser session
+   - Gets ALL comments including threaded replies
+   - Handles pagination automatically
+
+   Strategy 2: DOM Extraction (Fallback)
    - Uses WebDriverWait to ensure elements are loaded
    - Clicks "View all" and "Load more" buttons
-   - Scrolls to trigger lazy loading (up to 5 iterations)
+   - Scrolls to trigger lazy loading
    - Supports English and Indonesian UI text
-   
-   Strategy 3: JavaScript Fallback (Most Resilient)
+
+   Strategy 3: JavaScript Fallback (Last Resort)
    - Executes JavaScript directly in browser context
    - Can access elements Selenium selectors miss
    - Last resort for unusual DOM structures
@@ -159,6 +159,152 @@ from scraper.config import get_config
 from scraper.utils.anti_detection import AntiDetection
 
 
+def shortcode_to_media_id(shortcode):
+    """Convert an Instagram shortcode (from URL) to numeric media ID."""
+    alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+    media_id = 0
+    for char in shortcode:
+        media_id = media_id * 64 + alphabet.index(char)
+    return str(media_id)
+
+
+def scrape_comments_via_api(driver, post_url, limit=9999):
+    """
+    Fetch comments via Instagram's internal REST API.
+
+    Uses the browser's authenticated session (cookies) to call Instagram's
+    comment API endpoint directly. This is much more reliable than DOM scraping
+    for getting ALL comments, including threaded replies.
+
+    Args:
+        driver: Selenium WebDriver with active Instagram session
+        post_url: Instagram post or reel URL
+        limit: Max number of comments to fetch
+
+    Returns:
+        list: Array of comment dicts with author, text, timestamp, likes
+    """
+    shortcode = ''
+    if '/p/' in post_url:
+        shortcode = post_url.split('/p/')[1].split('/')[0]
+    elif '/reel/' in post_url:
+        shortcode = post_url.split('/reel/')[1].split('/')[0]
+
+    if not shortcode:
+        return []
+
+    media_id = shortcode_to_media_id(shortcode)
+    print(f"  >> API fetch: shortcode={shortcode}, media_id={media_id}")
+
+    try:
+        driver.set_script_timeout(60)
+
+        comments = driver.execute_async_script("""
+            const done = arguments[arguments.length - 1];
+            const mediaId = arguments[0];
+            const maxComments = arguments[1];
+
+            (async () => {
+                const results = [];
+                const seen = new Set();
+                const csrf = (document.cookie.match(/csrftoken=([^;]+)/) || [])[1] || '';
+
+                const headers = {
+                    'X-CSRFToken': csrf,
+                    'X-IG-App-ID': '936619743392459',
+                    'X-Requested-With': 'XMLHttpRequest',
+                };
+                const opts = { headers, credentials: 'include' };
+
+                function add(c) {
+                    if (!c || !c.text || seen.has(c.pk)) return;
+                    seen.add(c.pk);
+                    results.push({
+                        author: (c.user && c.user.username) || '',
+                        text: c.text,
+                        timestamp: c.created_at
+                            ? new Date(c.created_at * 1000).toISOString()
+                            : new Date().toISOString(),
+                        likes: c.comment_like_count || 0,
+                    });
+                }
+
+                // Paginate through top-level comments
+                let nextMinId = null;
+                let apiSucceeded = false;
+                for (let page = 0; page < 30 && results.length < maxComments; page++) {
+                    let url = '/api/v1/media/' + mediaId +
+                        '/comments/?can_support_threading=true';
+                    if (nextMinId) url += '&min_id=' + nextMinId;
+
+                    try {
+                        const resp = await fetch(url, opts);
+                        if (!resp.ok) break;
+                        apiSucceeded = true;
+                        const data = await resp.json();
+
+                        for (const c of (data.comments || [])) {
+                            add(c);
+
+                            // Fetch reply threads
+                            if (c.child_comment_count > 0) {
+                                // Add inline preview replies first
+                                for (const r of (c.preview_child_comments || [])) {
+                                    add(r);
+                                }
+
+                                // Fetch remaining child comments via API
+                                let childCursor = null;
+                                for (let cp = 0; cp < 10; cp++) {
+                                    let childUrl = '/api/v1/media/' + mediaId +
+                                        '/comments/' + c.pk + '/child_comments/';
+                                    if (childCursor) childUrl += '?max_id=' + childCursor;
+
+                                    try {
+                                        await new Promise(r => setTimeout(r, 300));
+                                        const cr = await fetch(childUrl, opts);
+                                        if (!cr.ok) break;
+                                        const cd = await cr.json();
+
+                                        for (const r of (cd.child_comments || [])) {
+                                            add(r);
+                                        }
+
+                                        if (cd.has_more_tail_child_comments &&
+                                            cd.next_max_child_cursor) {
+                                            childCursor = cd.next_max_child_cursor;
+                                        } else {
+                                            break;
+                                        }
+                                    } catch(e) { break; }
+                                }
+                            }
+                        }
+
+                        if (data.next_min_id) {
+                            nextMinId = data.next_min_id;
+                            await new Promise(r => setTimeout(r, 500));
+                        } else {
+                            break;
+                        }
+                    } catch(e) { break; }
+                }
+
+                return apiSucceeded ? results : null;
+            })().then(done).catch(e => {
+                console.error('API comment fetch error:', e);
+                done(null);
+            });
+        """, media_id, limit)
+
+        result = comments if comments is not None else []
+        return result
+
+    except Exception as e:
+        print(f"  ✗ API comment fetch failed: {e}")
+        return None  # None = API call failed; [] = succeeded with 0 comments
+
+
 def _safe_decode(text):
     """Safely decode unicode escape sequences, removing invalid surrogates."""
     try:
@@ -190,7 +336,7 @@ def extract_all_comments(posts):
         post_type = post.get('post_type')
         post_url = post.get('post_url')
         
-        for comment in post.get('comments', []):
+        for comment in (post.get('comments') or []):
             comment_with_ref = {
                 'post_id': post_id,
                 'post_type': post_type,
@@ -292,37 +438,14 @@ def export_comments_to_csv(comments, csv_path):
         print(f"  ✗ Error exporting comments to CSV: {e}")
 
 
-def _safe_decode(text):
-    """Safely decode unicode escape sequences, removing invalid surrogates."""
-    try:
-        decoded = text.encode('raw_unicode_escape').decode('unicode_escape', errors='replace')
-        # Remove surrogates that can't be encoded to UTF-8
-        return decoded.encode('utf-8', errors='surrogateescape').decode('utf-8', errors='replace')
-    except Exception:
-        return text
-
-
-def _parse_count(text):
-    """Parse count from text like '1,234' or '1.2K' or '3M'"""
-    text = text.strip().replace(',', '')
-    if text.upper().endswith('K'):
-        return int(float(text[:-1]) * 1000)
-    elif text.upper().endswith('M'):
-        return int(float(text[:-1]) * 1000000)
-    try:
-        return int(float(text))
-    except (ValueError, TypeError):
-        return 0
-
-
 def is_pinned_post(driver, link_element):
     """
     Check if a post link is a pinned post on the Instagram profile grid.
 
-    Instagram shows a small pin/bookmark SVG icon overlay on pinned posts.
-    Walks up from the link element to find the grid cell container (stops
-    when ancestor contains more than one post link), then checks for pinned
-    SVG within that scoped container only.
+    Uses multiple detection methods for reliability:
+    1. SVG with aria-label containing "Pinned"/"Disematkan"
+    2. Pinned text/icon overlay on the grid cell
+    3. Visually hidden pin indicator spans
 
     Args:
         driver: Selenium WebDriver instance
@@ -334,13 +457,9 @@ def is_pinned_post(driver, link_element):
     try:
         result = driver.execute_script("""
             const link = arguments[0];
-            const pinnedSelector =
-                'svg[aria-label*="Pinned"], svg[aria-label*="pinned"], ' +
-                'svg[aria-label*="Disematkan"], svg[aria-label*="disematkan"]';
 
             // Walk up from the link to find the grid cell container.
-            // Stop when the ancestor contains more than one post/reel link,
-            // which means we've moved past the single grid cell into the row.
+            // Stop when the ancestor contains more than one post/reel link.
             let container = link;
             let lastSingleLinkContainer = link;
 
@@ -351,14 +470,32 @@ def is_pinned_post(driver, link_element):
                 const postLinks = container.querySelectorAll(
                     'a[href*="/p/"], a[href*="/reel/"]'
                 );
-                if (postLinks.length > 1) break;  // Gone past single cell
+                if (postLinks.length > 1) break;
 
-                // This ancestor still belongs to our single grid cell
                 lastSingleLinkContainer = container;
             }
 
-            // Check for pinned SVG only within this scoped container
-            return !!lastSingleLinkContainer.querySelector(pinnedSelector);
+            const el = lastSingleLinkContainer;
+
+            // Method 1: SVG with aria-label (English + Indonesian)
+            const svgSel =
+                'svg[aria-label*="Pinned"], svg[aria-label*="pinned"], ' +
+                'svg[aria-label*="Disematkan"], svg[aria-label*="disematkan"]';
+            if (el.querySelector(svgSel)) return true;
+
+            // Method 2: Any element with title/aria containing pin keywords
+            const allEls = el.querySelectorAll('[aria-label], [title]');
+            for (const e of allEls) {
+                const label = (e.getAttribute('aria-label') || '') +
+                              (e.getAttribute('title') || '');
+                if (/pin/i.test(label) || /semat/i.test(label)) return true;
+            }
+
+            // Method 3: Check for visually hidden text about pinned
+            const text = el.textContent || '';
+            if (/\\bpinned\\b/i.test(text) || /\\bdisematkan\\b/i.test(text)) return true;
+
+            return false;
         """, link_element)
         return bool(result)
     except Exception:
@@ -366,15 +503,17 @@ def is_pinned_post(driver, link_element):
     return False
 
 
-def extract_post_data_from_page(driver):
+def extract_post_data_from_page(driver, post_url='', post_author=''):
     """Extract post data (content, likes, comment count) from an Instagram post page.
 
     Uses multiple strategies for robustness:
       1. Meta og:description tag (most stable across IG updates)
       2. Embedded JSON in page source (caption, like_count, etc.)
-      3. DOM selectors as final fallback
+      3. DOM+JS scoped extraction (finds caption tied to the correct post/reel)
     """
     result = {'content': '', 'likes': 0, 'comments_count': 0}
+    og_reliable = False  # True when og:description successfully parsed counts
+    is_reel = '/reel/' in post_url
     page_source = driver.page_source
 
     # ── STRATEGY 1: meta og:description ──────────────────────────────
@@ -390,32 +529,65 @@ def extract_post_data_from_page(driver):
             comment_m = re.search(r'([\d,.KkMm]+)\s*[Cc]omments?', desc)
             if comment_m:
                 result['comments_count'] = _parse_count(comment_m.group(1))
+                og_reliable = True  # og:description explicitly reported count (even 0)
 
-            # Extract caption
-            for sep in [' on Instagram: ', '\u201c']:
-                if sep in desc:
-                    caption = desc.split(sep, 1)[1]
-                    caption = caption.strip().strip('"').strip('\u201c').strip('\u201d')
-                    if len(caption) > 3:
-                        result['content'] = caption
-                    break
+            # Extract caption from og:description
+            # Instagram formats (2026):
+            #   "N likes, M comments - user on January 1, 2026: \"caption\""
+            #   "N likes, M comments - user on Instagram: \"caption\""
+            # Match: YEAR: "caption  OR  Instagram: "caption
+            # Caption may be truncated (no closing quote) so don't require it
+            caption_match = re.search(
+                r'(?:\d{4}|[Ii]nstagram):\s*["\u201c](.+)', desc, re.DOTALL
+            )
+            if caption_match:
+                caption = caption_match.group(1).rstrip().rstrip('"').rstrip('\u201d')
+                if len(caption) > 3:
+                    result['content'] = caption
     except Exception:
         pass
 
     # ── STRATEGY 2: page source embedded JSON ────────────────────────
+    # Extract shortcode from post_url for verification
+    post_shortcode = ''
+    if '/p/' in post_url:
+        post_shortcode = post_url.split('/p/')[1].split('/')[0]
+    elif '/reel/' in post_url:
+        post_shortcode = post_url.split('/reel/')[1].split('/')[0]
+
     if not result['content']:
-        caption_patterns = [
-            r'"caption"\s*:\s*\{[^}]*?"text"\s*:\s*"((?:[^"\\]|\\.){5,})"',
-            r'"edge_media_to_caption".*?"text"\s*:\s*"((?:[^"\\]|\\.){5,})"',
-            r'"accessibility_caption"\s*:\s*"((?:[^"\\]|\\.){10,})"',
-        ]
-        for pattern in caption_patterns:
-            match = re.search(pattern, page_source)
-            if match:
-                text = _safe_decode(match.group(1))
-                if len(text) > 5:
-                    result['content'] = text
-                    break
+        # First try: find caption near the specific shortcode in JSON
+        # Limit search to 2000 chars after shortcode to prevent cross-object matching
+        if post_shortcode:
+            shortcode_pos = page_source.find(f'"shortcode":"{post_shortcode}"')
+            if shortcode_pos == -1:
+                shortcode_pos = page_source.find(f'"shortcode": "{post_shortcode}"')
+            if shortcode_pos >= 0:
+                # Search only within a reasonable window after the shortcode
+                search_window = page_source[shortcode_pos:shortcode_pos + 2000]
+                caption_match = re.search(
+                    r'"caption"\s*:\s*\{[^}]*?"text"\s*:\s*"((?:[^"\\]|\\.){5,})"',
+                    search_window
+                )
+                if caption_match:
+                    text = _safe_decode(caption_match.group(1))
+                    if len(text) > 5:
+                        result['content'] = text
+
+        # Fallback: generic caption patterns
+        if not result['content']:
+            caption_patterns = [
+                r'"caption"\s*:\s*\{[^}]*?"text"\s*:\s*"((?:[^"\\]|\\.){5,})"',
+                r'"edge_media_to_caption".*?"text"\s*:\s*"((?:[^"\\]|\\.){5,})"',
+                r'"accessibility_caption"\s*:\s*"((?:[^"\\]|\\.){10,})"',
+            ]
+            for pattern in caption_patterns:
+                match = re.search(pattern, page_source)
+                if match:
+                    text = _safe_decode(match.group(1))
+                    if len(text) > 5:
+                        result['content'] = text
+                        break
 
     if result['likes'] == 0:
         like_patterns = [
@@ -429,7 +601,9 @@ def extract_post_data_from_page(driver):
                 result['likes'] = int(match.group(1))
                 break
 
-    if result['comments_count'] == 0:
+    # Only fallback to JSON for comments_count if og:description didn't provide it.
+    # og:description is most reliable; JSON in page source can contain cached/stale data.
+    if result['comments_count'] == 0 and not og_reliable:
         comment_count_patterns = [
             r'"edge_media_to_parent_comment"\s*:\s*\{"count"\s*:\s*(\d+)',
             r'"edge_media_to_comment"\s*:\s*\{"count"\s*:\s*(\d+)',
@@ -441,28 +615,99 @@ def extract_post_data_from_page(driver):
                 result['comments_count'] = int(match.group(1))
                 break
 
-    # ── STRATEGY 3: DOM selectors (fallback) ─────────────────────────
+    # ── STRATEGY 3: DOM+JS scoped extraction ─────────────────────────
+    # Uses JavaScript to find the caption tied to the post author,
+    # scoped to the correct reel/post container (not other reels in feed)
     if not result['content']:
-        caption_selectors = [
-            'h1',
-            'article h1',
-            'article div[role] span[dir="auto"]',
-            'article span[dir="auto"]',
-            'div[role="dialog"] span[dir="auto"]',
-            'span[dir="auto"]',
-        ]
-        for selector in caption_selectors:
-            try:
-                elems = driver.find_elements(By.CSS_SELECTOR, selector)
-                for elem in elems:
-                    text = elem.text.strip()
-                    if text and len(text) > 10 and not text.startswith('http'):
-                        result['content'] = text
-                        break
-            except Exception:
-                continue
-            if result['content']:
-                break
+        try:
+            js_caption = """
+            const postUrl = arguments[0];
+            const postAuthor = arguments[1].toLowerCase();
+            const isReel = arguments[2];
+
+            // For reels: find the reel container currently in viewport
+            // For posts: find the article/post container
+            // Key: scope to the container that has our post URL or author
+
+            // Strategy A: Find caption via the first span.xjp7ctv (author username)
+            // The caption text is in the same comment-like block as the author
+            const userSpans = document.querySelectorAll('span.xjp7ctv');
+            for (const userSpan of userSpans) {
+                const link = userSpan.querySelector('a[href^="/"]');
+                if (!link) continue;
+                const href = link.getAttribute('href') || '';
+                const username = href.replace(/^\\//, '').split('/')[0].toLowerCase();
+
+                // Must match the post author
+                if (postAuthor && username !== postAuthor) continue;
+
+                // For reels: check this element is in the visible viewport area
+                if (isReel) {
+                    const rect = userSpan.getBoundingClientRect();
+                    // Must be visible (roughly in the viewport)
+                    if (rect.top < -200 || rect.top > window.innerHeight + 200) continue;
+                }
+
+                // Walk up to find the caption container
+                let container = userSpan;
+                for (let i = 0; i < 6; i++) {
+                    if (!container.parentElement) break;
+                    container = container.parentElement;
+                }
+
+                // Find caption text: look for span[dir="auto"] near the author
+                const spans = container.querySelectorAll('span[dir="auto"]');
+                let captionText = '';
+                for (const span of spans) {
+                    const t = span.textContent.trim();
+                    if (!t || t.length < 3) continue;
+                    if (t.toLowerCase() === username) continue;
+                    // Take the longest text (likely the caption)
+                    if (t.length > captionText.length) captionText = t;
+                }
+
+                // Filter out captions that start with username (concatenated text)
+                if (captionText && captionText.toLowerCase().startsWith(username)) {
+                    captionText = captionText.substring(username.length).trim();
+                }
+
+                if (captionText && captionText.length > 5) return captionText;
+            }
+
+            // Strategy B: For reels, find visible h1 or large text blocks
+            if (isReel) {
+                const h1s = document.querySelectorAll('h1');
+                for (const h1 of h1s) {
+                    const rect = h1.getBoundingClientRect();
+                    if (rect.top >= -200 && rect.top <= window.innerHeight + 200) {
+                        const t = h1.textContent.trim();
+                        if (t && t.length > 5) return t;
+                    }
+                }
+            }
+
+            // Strategy C: Generic fallback - first long span[dir="auto"] in viewport
+            const allSpans = document.querySelectorAll('span[dir="auto"]');
+            for (const span of allSpans) {
+                const t = span.textContent.trim();
+                if (!t || t.length < 10) continue;
+                if (t.startsWith('http')) continue;
+
+                if (isReel) {
+                    const rect = span.getBoundingClientRect();
+                    if (rect.top < -200 || rect.top > window.innerHeight + 200) continue;
+                }
+
+                return t;
+            }
+
+            return null;
+            """
+            caption = driver.execute_script(js_caption, post_url, post_author, is_reel)
+            if caption and len(caption) > 5:
+                result['content'] = caption
+        except Exception:
+            pass
 
     if result['likes'] == 0:
         try:
@@ -744,7 +989,7 @@ def scrape_comments_from_post_dom(driver, post_url, post_type='post', limit=20):
     comments = []
 
     try:
-        # Wait for the article element to be present
+        # Wait for page to render
         try:
             WebDriverWait(driver, 15).until(
                 EC.presence_of_element_located((By.TAG_NAME, 'article'))
@@ -753,7 +998,7 @@ def scrape_comments_from_post_dom(driver, post_url, post_type='post', limit=20):
             pass
         time.sleep(3)
 
-        # Scroll down to trigger comment section rendering
+        # Scroll page down to trigger comment section rendering
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight * 0.5);")
         time.sleep(2)
 
@@ -777,27 +1022,156 @@ def scrape_comments_from_post_dom(driver, post_url, post_type='post', limit=20):
             except Exception:
                 continue
 
-        # Scroll to load more comments (up to 8 iterations)
-        max_scroll = min(8, max(3, limit // 5))
+        # Identify the scrollable comment container ONCE before the loop.
+        # Instagram 2026 uses a scrollable div panel for comments (especially reels).
+        # We find it by walking up from a comment username span and checking overflow.
+        scroller_found = driver.execute_script("""
+            window.__cScroller = null;
+            const spans = document.querySelectorAll('span.xjp7ctv');
+            if (spans.length < 2) return false;
+            let node = spans[1]; // skip first (caption)
+            for (let i = 0; i < 30; i++) {
+                if (!node.parentElement) break;
+                node = node.parentElement;
+                if (node === document.body || node === document.documentElement) continue;
+                if (node.scrollHeight > node.clientHeight + 30) {
+                    const cs = window.getComputedStyle(node);
+                    // Accept any overflow that isn't 'visible' (auto, scroll, hidden all work)
+                    if (cs.overflowY !== 'visible') {
+                        window.__cScroller = node;
+                        return true;
+                    }
+                }
+            }
+            return false;
+        """)
+        if scroller_found:
+            print(f"  ✓ Found scrollable comment container")
+
+        # Load ALL comments by scrolling the comment container and expanding replies.
+        # Instagram has comments in a scrollable panel (not the main page scroll).
+        # We need to: 1) scroll the comment container, 2) click "load more",
+        # 3) expand "View replies" / "Lihat balasan" threads.
+        max_scroll = min(60, max(15, limit // 2))
+        prev_comment_count = 0
+        stale_rounds = 0
+
         for i in range(max_scroll):
-            driver.execute_script("window.scrollBy(0, 600);")
+            # Step 1: Expand reply threads - target leaf-level clickable elements only
+            # (not container divs whose textContent happens to include "View replies")
+            expanded = driver.execute_script("""
+                let count = 0;
+                const elements = document.querySelectorAll(
+                    'span, button, [role="button"], li > div > div'
+                );
+                for (const el of elements) {
+                    if (el.children.length > 5) continue;  // skip large containers
+                    if (el.offsetParent === null) continue;  // skip hidden
+                    const txt = (el.textContent || '').trim();
+                    if (txt.length > 80 || txt.length < 2) continue;
+                    const lower = txt.toLowerCase();
+                    // Skip "hide replies" buttons
+                    if (/hide|sembunyikan/i.test(lower)) continue;
+                    if ((lower.includes('view') && lower.includes('repl')) ||
+                        (lower.includes('lihat') && lower.includes('balas')) ||
+                        /^\\d+\\s*repl/i.test(txt) ||
+                        /^\\d+\\s*balas/i.test(txt) ||
+                        /^[\\u2014\\u2013\\u2015\\u23AF\\-]+\\s*view/i.test(txt) ||
+                        /^[\\u2014\\u2013\\u2015\\u23AF\\-]+\\s*lihat/i.test(txt) ||
+                        /view\\s+\\d+\\s*repl/i.test(lower) ||
+                        /lihat\\s+\\d+\\s*balas/i.test(lower)) {
+                        try { el.click(); count++; } catch(e) {}
+                    }
+                }
+                return count;
+            """)
+            if expanded > 0:
+                print(f"  ✓ Expanded {expanded} reply thread(s) (iter {i+1})")
+                time.sleep(3)
+                # After expanding replies, re-detect scroller since DOM changed
+                driver.execute_script("""
+                    const spans = document.querySelectorAll('span.xjp7ctv');
+                    if (spans.length < 2) return;
+                    let node = spans[Math.min(1, spans.length - 1)];
+                    for (let i = 0; i < 30; i++) {
+                        if (!node.parentElement) break;
+                        node = node.parentElement;
+                        if (node === document.body || node === document.documentElement) continue;
+                        if (node.scrollHeight > node.clientHeight + 30) {
+                            const cs = window.getComputedStyle(node);
+                            if (cs.overflowY !== 'visible') {
+                                window.__cScroller = node;
+                                break;
+                            }
+                        }
+                    }
+                """)
+
+            # Step 2: Click "Load more comments" / pagination buttons
+            driver.execute_script("""
+                const btns = document.querySelectorAll('button, [role="button"]');
+                for (const btn of btns) {
+                    if (btn.offsetParent === null) continue;
+                    const txt = (btn.textContent || '').trim();
+                    const label = btn.getAttribute('aria-label') || '';
+                    const combined = (txt + ' ' + label).toLowerCase();
+                    if (/load more|muat lebih|more comment|lainnya/i.test(combined) ||
+                        txt === '+' || txt === '\\u2026' || txt === '\\u00b7\\u00b7\\u00b7' ||
+                        txt === '...' || txt === '···') {
+                        try { btn.click(); } catch(e) {}
+                    }
+                }
+            """)
+            time.sleep(1)
+
+            # Step 3: Scroll the comment container to trigger lazy loading
+            driver.execute_script("""
+                // Use pre-found scroller if available
+                if (window.__cScroller) {
+                    window.__cScroller.scrollTop = window.__cScroller.scrollHeight;
+                    return;
+                }
+                // Re-detect: walk up from last comment username span
+                const userSpans = document.querySelectorAll('span.xjp7ctv');
+                if (userSpans.length > 0) {
+                    let node = userSpans[userSpans.length - 1];
+                    for (let i = 0; i < 30; i++) {
+                        if (!node.parentElement) break;
+                        node = node.parentElement;
+                        if (node === document.body || node === document.documentElement) continue;
+                        if (node.scrollHeight > node.clientHeight + 30) {
+                            node.scrollTop = node.scrollHeight;
+                            window.__cScroller = node;  // cache for next iteration
+                            return;
+                        }
+                    }
+                    // Fallback: scrollIntoView last comment
+                    userSpans[userSpans.length - 1].scrollIntoView(
+                        {behavior: 'smooth', block: 'end'}
+                    );
+                    return;
+                }
+                // Last resort: scroll the page (for posts, not reels)
+                window.scrollBy(0, 600);
+            """)
             time.sleep(2)
 
-            # Try clicking "Load more" type buttons
-            for sel in [
-                "//button[contains(., 'Load more')]",
-                "//button[contains(., 'Muat lebih')]",
-                "//button[contains(@aria-label, 'Load more')]",
-            ]:
-                try:
-                    btn = driver.find_element(By.XPATH, sel)
-                    if btn.is_displayed():
-                        driver.execute_script("arguments[0].click();", btn)
-                        print(f"  ✓ Load more comments (iter {i+1})")
-                        time.sleep(3)
-                        break
-                except Exception:
-                    continue
+            # Check if new comments appeared (count both username spans and time elements)
+            cur_count = driver.execute_script("""
+                const spans = document.querySelectorAll('span.xjp7ctv').length || 0;
+                const times = document.querySelectorAll('time').length || 0;
+                return Math.max(spans, times);
+            """)
+            if i % 5 == 0:
+                print(f"  ... scroll iter {i+1}/{max_scroll}, comment elements: {cur_count}")
+            if cur_count == prev_comment_count:
+                stale_rounds += 1
+                if stale_rounds >= 6:
+                    print(f"  ⏹ No new comments after {stale_rounds} rounds (total: {cur_count})")
+                    break  # No new comments after 6 rounds
+            else:
+                stale_rounds = 0
+            prev_comment_count = cur_count
 
         time.sleep(2)
 
@@ -826,6 +1200,20 @@ def scrape_comments_from_post_dom(driver, post_url, post_type='post', limit=20):
             return false;
         }
 
+        // Helper: check if element is inside the media/image area (tagged users)
+        function isInsideMediaArea(el) {
+            let node = el;
+            for (let i = 0; i < 15; i++) {
+                if (!node || !node.parentElement) break;
+                node = node.parentElement;
+                // Tagged user overlays are inside role="presentation" (image area)
+                if (node.getAttribute('role') === 'presentation') return true;
+                // Tagged overlay on the photo/video container
+                if (node.querySelector('video') && !node.querySelector('time')) return true;
+            }
+            return false;
+        }
+
         // Instagram 2026: usernames in comments are wrapped in span.xjp7ctv
         const userSpans = document.querySelectorAll('span.xjp7ctv');
         let isFirst = true;
@@ -843,6 +1231,9 @@ def scrape_comments_from_post_dom(driver, post_url, post_type='post', limit=20):
                 // Skip the first one - it's the post caption
                 if (isFirst) { isFirst = false; continue; }
 
+                // Skip tagged users: they are inside the media/image area
+                if (isInsideMediaArea(userSpan)) continue;
+
                 // Walk up to find the comment block container
                 let container = userSpan;
                 for (let i = 0; i < 8; i++) {
@@ -853,6 +1244,10 @@ def scrape_comments_from_post_dom(driver, post_url, post_type='post', limit=20):
                         container.textContent.includes('Reply') ||
                         container.textContent.includes('Balas')) break;
                 }
+
+                // Real comments must have a timestamp - tagged users don't
+                const timeEl = container.querySelector('time');
+                if (!timeEl) continue;
 
                 // Find comment text in span[dir="auto"] within container
                 const spans = container.querySelectorAll('span[dir="auto"]');
@@ -870,11 +1265,10 @@ def scrape_comments_from_post_dom(driver, post_url, post_type='post', limit=20):
                 if (commentText.toLowerCase().startsWith(username.toLowerCase())) continue;
                 seenTexts.add(commentText);
 
-                const timeEl = container.querySelector('time');
                 results.push({
                     author: username,
                     text: commentText,
-                    timestamp: timeEl ? timeEl.getAttribute('datetime') : new Date().toISOString()
+                    timestamp: timeEl.getAttribute('datetime') || new Date().toISOString()
                 });
             } catch(e) { continue; }
         }
@@ -893,8 +1287,12 @@ def scrape_comments_from_post_dom(driver, post_url, post_type='post', limit=20):
                         href.includes('/reel/') || href.includes('/direct/') ||
                         href.includes('/accounts/') || href.includes('/stories/') ||
                         href.includes('/web/') || href.includes('/legal/') ||
-                        href.includes('/about/') || href.includes('/privacy/')) continue;
+                        href.includes('/about/') || href.includes('/privacy/') ||
+                        href.includes('/tagged/')) continue;
                     if (skipFirst) { skipFirst = false; continue; }
+
+                    // Skip tagged users in media area
+                    if (isInsideMediaArea(link)) continue;
 
                     let container = link;
                     for (let i = 0; i < 8; i++) {
@@ -902,6 +1300,10 @@ def scrape_comments_from_post_dom(driver, post_url, post_type='post', limit=20):
                         container = container.parentElement;
                         if (container.querySelector('time')) break;
                     }
+
+                    // Require timestamp for real comments
+                    const timeEl = container.querySelector('time');
+                    if (!timeEl) continue;
 
                     const spans = container.querySelectorAll('span[dir="auto"]');
                     let commentText = '';
@@ -915,11 +1317,10 @@ def scrape_comments_from_post_dom(driver, post_url, post_type='post', limit=20):
                     if (!commentText || seenTexts.has(commentText)) continue;
                     if (commentText.toLowerCase().startsWith(name.toLowerCase())) continue;
                     seenTexts.add(commentText);
-                    const timeEl = container.querySelector('time');
                     results.push({
                         author: name,
                         text: commentText,
-                        timestamp: timeEl ? timeEl.getAttribute('datetime') : new Date().toISOString()
+                        timestamp: timeEl.getAttribute('datetime') || new Date().toISOString()
                     });
                 } catch(e) { continue; }
             }
@@ -989,6 +1390,18 @@ def scrape_comments_from_post_js(driver, post_url, post_type='post', limit=20):
             return false;
         }
 
+        // Helper: check if element is inside media/image area (tagged users)
+        function isInsideMedia(el) {
+            let node = el;
+            for (let i = 0; i < 15; i++) {
+                if (!node || !node.parentElement) break;
+                node = node.parentElement;
+                if (node.getAttribute('role') === 'presentation') return true;
+                if (node.querySelector('video') && !node.querySelector('time')) return true;
+            }
+            return false;
+        }
+
         // Get all spans in document order
         const allSpans = document.querySelectorAll('span[dir="auto"]');
         const spanList = Array.from(allSpans);
@@ -1012,7 +1425,8 @@ def scrape_comments_from_post_js(driver, post_url, post_type='post', limit=20):
                 href.includes('/reel/') || href.includes('/accounts/') ||
                 href.includes('/stories/') || href.includes('/direct/') ||
                 href.includes('/web/') || href.includes('/legal/') ||
-                href.includes('/about/') || href.includes('/privacy/')) continue;
+                href.includes('/about/') || href.includes('/privacy/') ||
+                href.includes('/tagged/')) continue;
 
             const username = href.replace(/^\\//, '').split('/')[0];
             if (!username || username.length < 2) continue;
@@ -1021,9 +1435,32 @@ def scrape_comments_from_post_js(driver, post_url, post_type='post', limit=20):
             // This is a username span. Skip the first one (post caption)
             if (!captionSkipped) { captionSkipped = true; continue; }
 
+            // Skip tagged users: they are inside the media/image area
+            if (isInsideMedia(span)) continue;
+
+            // Look for timestamp nearby - real comments must have one
+            const container = span.closest('div')?.parentElement?.parentElement;
+            let timestamp = null;
+            if (container) {
+                const timeEl = container.querySelector('time');
+                if (timeEl) timestamp = timeEl.getAttribute('datetime');
+            }
+            // No timestamp = likely a tagged user, not a comment
+            if (!timestamp) {
+                // Try a wider search for time element
+                let wider = span;
+                let foundTime = false;
+                for (let k = 0; k < 8; k++) {
+                    if (!wider.parentElement) break;
+                    wider = wider.parentElement;
+                    const t = wider.querySelector('time');
+                    if (t) { timestamp = t.getAttribute('datetime'); foundTime = true; break; }
+                }
+                if (!foundTime) continue;
+            }
+
             // Look ahead in the span list for the comment text
             let commentText = '';
-            let timestamp = null;
 
             for (let j = i; j < Math.min(i + 10, spanList.length); j++) {
                 const nextSpan = spanList[j];
@@ -1049,13 +1486,6 @@ def scrape_comments_from_post_js(driver, post_url, post_type='post', limit=20):
                 if (nextText.length > commentText.length) {
                     commentText = nextText;
                 }
-            }
-
-            // Also look for timestamp nearby
-            const container = span.closest('div')?.parentElement?.parentElement;
-            if (container) {
-                const timeEl = container.querySelector('time');
-                if (timeEl) timestamp = timeEl.getAttribute('datetime');
             }
 
             if (!commentText || seenTexts.has(commentText)) continue;
@@ -1086,10 +1516,10 @@ def scrape_comments_from_post(driver, post_url, post_type='post', limit=20):
     """
     Extract comments using multiple strategies with fallback.
 
-    Implements a robust 3-strategy approach:
-    1. JSON Parsing (fastest, from page source)
-    2. DOM Extraction (most comprehensive, with scrolling & button clicks)
-    3. JavaScript Fallback (most resilient, direct browser context)
+    Strategy priority:
+    1. Instagram REST API (most reliable - gets ALL comments + replies)
+    2. DOM Extraction with scrolling (fallback)
+    3. JavaScript DOM scanning (last resort)
 
     Args:
         driver: Selenium WebDriver instance with an active Instagram session
@@ -1102,15 +1532,17 @@ def scrape_comments_from_post(driver, post_url, post_type='post', limit=20):
     """
     print(f"\n  Extracting comments from {post_type}: {post_url} (limit: {limit})")
 
-    # Strategy 1: Page source JSON
-    print(f"  -> Trying Strategy 1: JSON extraction...")
-    comments = scrape_comments_from_post_json(driver, post_url, limit=limit)
-    if comments:
-        print(f"  ✓ Strategy 1 succeeded: {len(comments)} comments via JSON")
+    # Strategy 1: Instagram REST API (gets all comments + replies directly)
+    # Returns None if API call failed, [] if succeeded with 0 comments
+    print(f"  -> Trying Strategy 1: API fetch...")
+    comments = scrape_comments_via_api(driver, post_url, limit=limit)
+    if comments is not None:
+        # API succeeded - trust the result even if 0 comments
+        print(f"  ✓ Strategy 1 succeeded: {len(comments)} comments via API")
         return comments
-    print(f"  ✗ Strategy 1 failed")
+    print(f"  ✗ Strategy 1 failed (API error)")
 
-    # Strategy 2: DOM extraction with WebDriverWait (longer timeouts)
+    # Strategy 2: DOM extraction with scrolling
     print(f"  -> Trying Strategy 2: DOM extraction...")
     comments = scrape_comments_from_post_dom(driver, post_url, post_type, limit=limit)
     if comments:
@@ -1334,28 +1766,71 @@ def scrape_profile_simple(driver, profile_url, limit=5, scrape_comments=True, co
     
     Validates: Requirements 13.1, 13.2, 13.3, 14.7
     """
-    print(f"\n🔍 Scraping {profile_url}...")
+    # Extract profile username from URL for filtering
+    profile_username = profile_url.rstrip('/').split('/')[-1].lower()
+
+    print(f"\n🔍 Scraping {profile_url} (@{profile_username})...")
 
     driver.get(profile_url)
     time.sleep(3)
 
     posts = []
 
-    # Find all post links (including reels)
+    # Scroll down to load more posts (Instagram uses lazy loading)
+    # We need to scroll multiple times to ensure we have enough posts
     print("📸 Finding posts and reels...")
+    
+    max_scroll_attempts = 10
+    scroll_increment = 800  # pixels to scroll each time
+    last_post_count = 0
+    stale_scrolls = 0
+    
+    for scroll_attempt in range(max_scroll_attempts):
+        # Scroll down to trigger lazy loading
+        driver.execute_script(f"window.scrollTo(0, {scroll_increment * (scroll_attempt + 1)});")
+        time.sleep(2)  # Wait for content to load
+        
+        # Count current posts
+        post_links = driver.find_elements(By.CSS_SELECTOR, 'a[href*="/p/"], a[href*="/reel/"]')
+        current_count = len(post_links)
+        
+        # Check if we found new posts
+        if current_count > last_post_count:
+            stale_scrolls = 0
+            last_post_count = current_count
+            print(f"  ... scroll {scroll_attempt + 1}: found {current_count} post links")
+            # We need more than limit to account for duplicates and pinned posts
+            if current_count >= limit * 3:
+                break
+        else:
+            stale_scrolls += 1
+            if stale_scrolls >= 3:
+                print(f"  ⏹ No new posts after {stale_scrolls} scrolls")
+                break
+    
+    # Scroll back to top for consistent behavior
+    driver.execute_script("window.scrollTo(0, 0);")
+    time.sleep(1)
+
+    # Final collection of post links
     post_links = driver.find_elements(By.CSS_SELECTOR, 'a[href*="/p/"], a[href*="/reel/"]')
+    print(f"  ✓ Found {len(post_links)} post links after scrolling")
 
     if not post_links:
         post_links = driver.find_elements(By.XPATH, '//a[contains(@href, "/p/") or contains(@href, "/reel/")]')
+        if post_links:
+            print(f"  ✓ Found {len(post_links)} post links via XPath fallback")
 
-    print(f"✓ Found {len(post_links)} post links")
-
-    # Extract post URLs first, skipping pinned posts
+    # Extract post URLs first, skipping pinned posts, duplicates, and non-profile posts
     post_urls = []
     seen_ids = set()
     pinned_count = 0
+    duplicate_count = 0
 
-    for link in post_links[:limit * 3]:
+    # Scan more links to handle pinned + dupes (Instagram grid can have 2-3 <a> per cell)
+    scan_limit = max(limit * 5, 30)
+
+    for link in post_links[:scan_limit]:
         if len(post_urls) >= limit:
             break
 
@@ -1364,19 +1839,7 @@ def scrape_profile_simple(driver, profile_url, limit=5, scrape_comments=True, co
             if not href:
                 continue
 
-            # Check if this is a pinned post - skip it
-            if is_pinned_post(driver, link):
-                pinned_count += 1
-                # Extract ID for logging
-                if '/p/' in href:
-                    pid = href.split('/p/')[1].split('/')[0]
-                elif '/reel/' in href:
-                    pid = href.split('/reel/')[1].split('/')[0]
-                else:
-                    pid = '?'
-                print(f"  📌 Skipping pinned post: {pid}")
-                continue
-
+            # Extract post_id and post_type from URL
             if '/p/' in href:
                 post_id = href.split('/p/')[1].split('/')[0]
                 post_type = 'post'
@@ -1386,32 +1849,60 @@ def scrape_profile_simple(driver, profile_url, limit=5, scrape_comments=True, co
             else:
                 continue
 
-            # Skip duplicates (same post_id already processed)
+            # Skip duplicates early (same post_id already processed)
             if post_id in seen_ids:
+                duplicate_count += 1
+                continue
+
+            # Check if this is a pinned post - skip it
+            if is_pinned_post(driver, link):
+                pinned_count += 1
+                print(f"  📌 Skipping pinned {post_type}: {post_id}")
+                seen_ids.add(post_id)
                 continue
 
             seen_ids.add(post_id)
             post_urls.append((post_id, href, post_type))
+            print(f"  ✓ Added {post_type}: {post_id}")
 
         except Exception as e:
             continue
 
     if pinned_count > 0:
         print(f"📌 Skipped {pinned_count} pinned post(s)")
+    if duplicate_count > 0:
+        print(f"⏭️  Skipped {duplicate_count} duplicate link(s)")
 
-    print(f"📋 Will scrape {len(post_urls)} post(s)")
+    print(f"📋 Will scrape {len(post_urls)} unique post(s)")
 
     # Process each post
     for i, (post_id, post_url, post_type) in enumerate(post_urls, 1):
         try:
             print(f"\n📄 {post_type.capitalize()} {i}/{len(post_urls)}: {post_id}")
 
-            # Navigate to post to get details
+            # Force clean navigation: go to blank page first to clear SPA state,
+            # then navigate to the actual post URL. This prevents stale meta tags
+            # and page source from the previous post/reel.
+            driver.get('about:blank')
+            time.sleep(0.5)
             driver.get(post_url)
-            time.sleep(4)  # Longer wait for full page + comments to load
+            time.sleep(4)
+
+            # For reels: scroll to top to ensure target reel is in view
+            # (Instagram reel feed can auto-scroll to different reels)
+            if post_type == 'reel':
+                driver.execute_script("window.scrollTo(0, 0);")
+                time.sleep(1)
+
+            # Verify we're on the right page
+            current_url = driver.current_url
+            if post_id not in current_url:
+                print(f"  ⚠ URL mismatch, retrying: {current_url}")
+                driver.get(post_url)
+                time.sleep(4)
 
             # Extract post data using multi-strategy extraction
-            post_info = extract_post_data_from_page(driver)
+            post_info = extract_post_data_from_page(driver, post_url, profile_username)
             content = post_info['content']
             likes = post_info['likes']
 
@@ -1421,14 +1912,14 @@ def scrape_profile_simple(driver, profile_url, limit=5, scrape_comments=True, co
             # Create post data
             post_data = {
                 'post_id': post_id,
-                'post_type': post_type,  # 'post' or 'reel' - detected from URL pattern
+                'post_type': post_type,
                 'post_url': post_url,
                 'author': profile_url.split('/')[-2],
                 'content': content or f"Post {post_id}",
                 'timestamp': datetime.now().isoformat() + 'Z',
                 'likes': likes,
                 'comments_count': post_info['comments_count'],
-                'comments': [],
+                'comments': None,
                 'hashtags': hashtags,
                 'scraped_at': datetime.now().isoformat() + 'Z'
             }
@@ -1451,13 +1942,20 @@ def scrape_profile_simple(driver, profile_url, limit=5, scrape_comments=True, co
             # The post_type parameter helps with logging and debugging.
             # ═══════════════════════════════════════════════════════════════
             if scrape_comments:
+                # Always try scraping comments when enabled - comments_count from
+                # meta/JSON can be inaccurate (stale or 0 even when comments exist)
                 comments = scrape_comments_from_post(driver, post_url, post_type, limit=comments_per_post)
-                post_data['comments'] = comments
                 if comments:
-                    post_data['comments_count'] = len(comments)
+                    post_data['comments'] = comments
+                    post_data['comments_count'] = max(post_data['comments_count'], len(comments))
+                else:
+                    post_data['comments'] = None
+            else:
+                post_data['comments'] = None
 
             posts.append(post_data)
-            print(f"  ✓ Scraped post with {post_data['comments_count']} comments")
+            actual = len(post_data['comments']) if post_data['comments'] else 0
+            print(f"  ✓ Scraped post with {actual} comments")
 
             # Return to profile for next post
             driver.get(profile_url)
@@ -1502,7 +2000,7 @@ def main():
     if len(sys.argv) > 4:
         scrape_comments = sys.argv[4].lower() == 'true'
 
-    comments_per_post = 20
+    comments_per_post = 9999  # Default: scrape all available comments
     if len(sys.argv) > 5:
         comments_per_post = int(sys.argv[5])
 
@@ -1511,7 +2009,7 @@ def main():
     print(f"🖥️  Headless: {headless}")
     print(f"💬 Scrape Comments: {scrape_comments}")
     if scrape_comments:
-        print(f"📝 Comments per post: {comments_per_post}")
+        print(f"📝 Comments per post: {'all' if comments_per_post >= 9999 else comments_per_post}")
     print()
     
     driver = None

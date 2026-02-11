@@ -461,4 +461,135 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+    // Scrape functionality
+    const scrapeBtn = document.getElementById('scrape-button');
+    const scrapeModal = document.getElementById('scrape-modal');
+    const closeScrapeModal = document.getElementById('close-scrape-modal');
+    const cancelScrapeBtn = document.getElementById('cancel-scrape-button');
+    const confirmScrapeBtn = document.getElementById('confirm-scrape-button');
+    const scrapeTargetUrl = document.getElementById('scrape-target-url');
+    const scrapeLimit = document.getElementById('scrape-limit');
+    const scrapeCommentsCheckbox = document.getElementById('scrape-comments-checkbox');
+    const runSentimentCheckbox = document.getElementById('run-sentiment-checkbox');
+    const autoImportCheckbox = document.getElementById('auto-import-checkbox');
+    const scrapeClearExistingCheckbox = document.getElementById('scrape-clear-existing-checkbox');
+
+    // Open scrape modal
+    if (scrapeBtn) {
+        scrapeBtn.addEventListener('click', () => {
+            scrapeModal.classList.remove('hidden');
+        });
+    }
+
+    // Close scrape modal handlers
+    if (closeScrapeModal) {
+        closeScrapeModal.addEventListener('click', () => {
+            scrapeModal.classList.add('hidden');
+        });
+    }
+
+    if (cancelScrapeBtn) {
+        cancelScrapeBtn.addEventListener('click', () => {
+            scrapeModal.classList.add('hidden');
+        });
+    }
+
+    // Close modal when clicking outside
+    if (scrapeModal) {
+        scrapeModal.addEventListener('click', (e) => {
+            if (e.target === scrapeModal) {
+                scrapeModal.classList.add('hidden');
+            }
+        });
+    }
+
+    // Confirm scrape
+    if (confirmScrapeBtn) {
+        confirmScrapeBtn.addEventListener('click', async () => {
+            const targetUrl = scrapeTargetUrl.value.trim();
+            const limit = parseInt(scrapeLimit.value);
+
+            // Validation
+            if (!targetUrl) {
+                alert('Please enter an Instagram profile URL');
+                return;
+            }
+
+            if (!targetUrl.includes('instagram.com')) {
+                alert('Please enter a valid Instagram URL');
+                return;
+            }
+
+            if (limit < 1 || limit > 50) {
+                alert('Number of posts must be between 1 and 50');
+                return;
+            }
+
+            // Build form data
+            const formData = new FormData();
+            formData.append('target_url', targetUrl);
+            formData.append('limit', limit);
+            formData.append('scrape_comments', scrapeCommentsCheckbox.checked ? 'true' : 'false');
+            formData.append('run_sentiment', runSentimentCheckbox.checked ? 'true' : 'false');
+            formData.append('auto_import', autoImportCheckbox.checked ? 'true' : 'false');
+            formData.append('clear_existing', scrapeClearExistingCheckbox.checked ? 'true' : 'false');
+
+            // Show loading state
+            const originalBtnText = confirmScrapeBtn.innerHTML;
+            confirmScrapeBtn.disabled = true;
+            confirmScrapeBtn.innerHTML = '<span class="loading-spinner w-4 h-4 mr-2"></span>Scraping... (this may take 2-5 minutes)';
+
+            try {
+                const response = await fetch('/api/scrape', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    // Build success message
+                    let message = result.message || 'Scraping completed successfully!';
+                    
+                    if (result.scraping) {
+                        message += `\n\nScraping Results:`;
+                        message += `\n  - Posts scraped: ${result.scraping.posts_scraped}`;
+                        message += `\n  - Sentiment analysis: ${result.scraping.sentiment_run ? 'Yes' : 'No'}`;
+                    }
+
+                    if (result.import) {
+                        message += `\n\nImport Results:`;
+                        message += `\n  - Total: ${result.import.total}`;
+                        message += `\n  - Inserted: ${result.import.inserted}`;
+                        message += `\n  - Skipped: ${result.import.skipped}`;
+                        
+                        if (result.import.cleared) {
+                            message += `\n\nCleared before import:`;
+                            message += `\n  - Posts: ${result.import.cleared.posts}`;
+                            message += `\n  - Sentiments: ${result.import.cleared.sentiments}`;
+                            message += `\n  - Comments: ${result.import.cleared.comments}`;
+                        }
+                    }
+
+                    alert(message);
+
+                    // Close modal and refresh data
+                    scrapeModal.classList.add('hidden');
+                    if (autoImportCheckbox.checked) {
+                        loadPostsData(); // Refresh the table
+                    }
+                } else {
+                    alert(`Scraping failed: ${result.error || 'Unknown error'}\n\nPlease check:\n- Instagram credentials in .env file\n- Internet connection\n- Instagram URL is valid`);
+                }
+            } catch (error) {
+                console.error('Scraping error:', error);
+                alert('An error occurred during scraping. Please check the console for details and try again.');
+            } finally {
+                // Restore button state
+                confirmScrapeBtn.disabled = false;
+                confirmScrapeBtn.innerHTML = originalBtnText;
+            }
+        });
+    }
 });

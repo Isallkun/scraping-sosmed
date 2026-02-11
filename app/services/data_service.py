@@ -49,6 +49,17 @@ class DataServiceError(Exception):
     pass
 
 
+def _parse_end_date(date_str):
+    """Parse end date and set to end of day if no time component."""
+    if not date_str:
+        return None
+    dt = datetime.fromisoformat(date_str)
+    # If it's a date-only string (midnight), set to end of day to be inclusive
+    if dt.hour == 0 and dt.minute == 0 and dt.second == 0 and dt.microsecond == 0:
+        dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return dt
+
+
 def get_summary_stats() -> Dict[str, Any]:
     """
     Get overall statistics for the home page.
@@ -208,14 +219,14 @@ def get_sentiment_data(start_date: Optional[str] = None,
     try:
         # Parse dates if provided
         start_dt = datetime.fromisoformat(start_date) if start_date else None
-        end_dt = datetime.fromisoformat(end_date) if end_date else None
-        
+        end_dt = _parse_end_date(end_date)
+
         # Default to last 30 days if no dates provided
         if not start_dt:
             start_dt = datetime.now() - timedelta(days=30)
         if not end_dt:
             end_dt = datetime.now()
-        
+
         # Get sentiment distribution
         distribution_raw = get_sentiment_distribution(start_dt, end_dt)
         
@@ -329,14 +340,14 @@ def get_engagement_data(start_date: Optional[str] = None,
     try:
         # Parse dates if provided
         start_dt = datetime.fromisoformat(start_date) if start_date else None
-        end_dt = datetime.fromisoformat(end_date) if end_date else None
-        
+        end_dt = _parse_end_date(end_date)
+
         # Default to last 30 days if no dates provided
         if not start_dt:
             start_dt = datetime.now() - timedelta(days=30)
         if not end_dt:
             end_dt = datetime.now()
-        
+
         db = get_db_connection()
 
         # Get engagement summary stats
@@ -479,16 +490,16 @@ def get_content_data(start_date: Optional[str] = None,
     try:
         # Parse dates if provided
         start_dt = datetime.fromisoformat(start_date) if start_date else None
-        end_dt = datetime.fromisoformat(end_date) if end_date else None
-        
+        end_dt = _parse_end_date(end_date)
+
         # Default to last 30 days if no dates provided
         if not start_dt:
             start_dt = datetime.now() - timedelta(days=30)
         if not end_dt:
             end_dt = datetime.now()
-        
+
         db = get_db_connection()
-        
+
         # Get posts for hashtag extraction
         posts = get_posts_by_date_range(start_dt, end_dt)
         
@@ -679,7 +690,7 @@ def get_posts_paginated(page: int = 1,
         start_date = filters.get('start_date')
         end_date = filters.get('end_date')
         start_dt = datetime.fromisoformat(start_date) if start_date else None
-        end_dt = datetime.fromisoformat(end_date) if end_date else None
+        end_dt = _parse_end_date(end_date)
         
         # Build WHERE clause conditions
         conditions = []

@@ -43,30 +43,37 @@ def load_credentials():
 def scrape_instagram(target_url, limit=5, headless=False):
     """Scrape Instagram with better error handling"""
     
-    print(f"🎯 Target: {target_url}")
-    print(f"📊 Limit: {limit} posts")
-    print(f"🖥️  Headless: {headless}")
+    # Set UTF-8 encoding for Windows console
+    import sys
+    if sys.platform == 'win32':
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    
+    print(f"Target: {target_url}")
+    print(f"Limit: {limit} posts")
+    print(f"Headless: {headless}")
     print()
     
     # Load credentials
-    print("🔐 Loading credentials...")
+    print("Loading credentials...")
     username, password = load_credentials()
-    print(f"✓ Credentials loaded for: {username}")
+    print(f"Credentials loaded for: {username}")
     print()
     
     # Initialize scraper
-    print("🚀 Initializing Instagram scraper...")
+    print("Initializing Instagram scraper...")
     scraper = InstagramScraper(
         credentials={'username': username, 'password': password},
         rate_limit=20,  # Lower rate limit to avoid detection
         timeout=600,    # Longer timeout for authentication
         headless=headless
     )
-    print("✓ Scraper initialized")
+    print("Scraper initialized")
     print()
     
     # Start scraping
-    print("🔍 Starting scraping process...")
+    print("Starting scraping process...")
     print("   (This may take a few minutes...)")
     print()
     
@@ -88,12 +95,12 @@ def scrape_instagram(target_url, limit=5, headless=False):
         
         print()
         print("=" * 70)
-        print("✅ Scraping Completed Successfully!")
+        print("Scraping Completed Successfully!")
         print("=" * 70)
         print()
-        print(f"📁 Output: {output_path}")
-        print(f"📊 Posts scraped: {result['metadata']['total_posts']}")
-        print(f"⏱️  Execution time: {result['metadata'].get('execution_time_ms', 0)}ms")
+        print(f"Output: {output_path}")
+        print(f"Posts scraped: {result['metadata']['total_posts']}")
+        print(f"Execution time: {result['metadata'].get('execution_time_ms', 0)}ms")
         print()
         
         # Show sample posts
@@ -103,7 +110,7 @@ def scrape_instagram(target_url, limit=5, headless=False):
             for i, post in enumerate(result['posts'][:3], 1):
                 print(f"{i}. @{post['author']}")
                 print(f"   {post['content'][:60]}...")
-                print(f"   ❤️ {post['likes']} | 💬 {post['comments_count']}")
+                print(f"   Likes: {post['likes']} | Comments: {post['comments_count']}")
                 print()
         
         print("Next Steps:")
@@ -118,13 +125,13 @@ def scrape_instagram(target_url, limit=5, headless=False):
         
     except KeyboardInterrupt:
         print()
-        print("⚠️  Scraping interrupted by user")
+        print("WARNING: Scraping interrupted by user")
         return None
         
     except Exception as e:
         print()
         print("=" * 70)
-        print("❌ Scraping Failed")
+        print("ERROR: Scraping Failed")
         print("=" * 70)
         print()
         print(f"Error: {str(e)}")
@@ -165,11 +172,11 @@ def main():
     
     if result:
         print("=" * 70)
-        print("🎉 Success! Check the output file for results.")
+        print("SUCCESS! Check the output file for results.")
         print("=" * 70)
     else:
         print("=" * 70)
-        print("⚠️  Scraping did not complete. See error messages above.")
+        print("WARNING: Scraping did not complete. See error messages above.")
         print("=" * 70)
 
 if __name__ == "__main__":
