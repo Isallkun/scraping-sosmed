@@ -239,7 +239,7 @@ function updateTopPostsTable(posts) {
                     ${dashboardUtils.formatNumber(post.engagement || post.engagement_rate || 0)}
                 </td>
                 <td>
-                    <span class="badge ${mediaType === 'reel' ? 'badge-primary' : 'badge-neutral'}">
+                    <span class="badge ${mediaType === 'reels' ? 'badge-primary' : 'badge-neutral'}">
                         ${mediaType}
                     </span>
                 </td>

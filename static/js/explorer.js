@@ -78,7 +78,7 @@ function updateTable(posts) {
 
         // Post type badge
         const mediaType = post.media_type || 'post';
-        const typeBadge = mediaType === 'reel'
+        const typeBadge = mediaType === 'reels'
             ? '<span class="badge badge-primary">Reel</span>'
             : '<span class="badge badge-neutral">Post</span>';
 
