@@ -12,6 +12,7 @@ from scraper.scrapers.base_scraper import (
 from scraper.scrapers.instagram import InstagramScraper
 from scraper.scrapers.twitter import TwitterScraper
 from scraper.scrapers.facebook import FacebookScraper
+from scraper.scrapers.facebook_comments import FacebookCommentCrawler
 
 __all__ = [
     'BaseScraper',
@@ -21,5 +22,6 @@ __all__ = [
     'TimeoutError',
     'InstagramScraper',
     'TwitterScraper',
-    'FacebookScraper'
+    'FacebookScraper',
+    'FacebookCommentCrawler'
 ]

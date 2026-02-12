@@ -3,8 +3,12 @@ selenium==4.16.0
 beautifulsoup4==4.12.2
 webdriver-manager==4.0.1
 
+# Playwright (Facebook Comment Crawler)
+playwright==1.41.0
+
 # Data Processing
 pandas==2.1.4
+openpyxl==3.1.2
 
 # Sentiment Analysis
 vaderSentiment==3.3.2
