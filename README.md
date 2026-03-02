@@ -156,17 +156,17 @@ python view_results.py output/demo_instagram_posts_TIMESTAMP_sentiment.json
 
 ### Usage
 
-#### 📸 Real Instagram Scraping (Simplified & Fast)
+#### 📸 Instagram Scraping (Simplified & Fast)
 
 ```bash
 # Scrape 5 posts from a profile (includes both posts and reels)
 python scrape_instagram_simple.py https://www.instagram.com/rusdi_sutejo/ 5
 
 # Analyze sentiment
-python -m sentiment.main_analyzer --input output/instagram_simple_TIMESTAMP.json --output output/instagram_simple_TIMESTAMP_sentiment.json
+python -m sentiment.main_analyzer --input output/instagram/raw/posts_TIMESTAMP.json --output output/instagram/sentiment/posts_TIMESTAMP_sentiment.json
 
 # View results
-python view_results.py output/instagram_simple_TIMESTAMP_sentiment.json
+python view_results.py output/instagram/sentiment/posts_TIMESTAMP_sentiment.json
 ```
 
 **Status**: ✅ **WORKING** - Tested February 9, 2026  
@@ -175,8 +175,42 @@ python view_results.py output/instagram_simple_TIMESTAMP_sentiment.json
 - ✅ Enhanced comment extraction with 3-strategy fallback
 - ✅ Extracts comment text, author, and timestamp
 - ✅ Supports Indonesian and English UI
+- ✅ Cookie-based session persistence (no repeated logins)
 
 **See**: [docs/INSTAGRAM_SIMPLIFIED_GUIDE.md](docs/INSTAGRAM_SIMPLIFIED_GUIDE.md) for complete guide
+
+#### 📘 Facebook Scraping (Simplified)
+
+```bash
+# Scrape 5 posts from a Facebook profile
+python scrape_facebook_simple.py https://www.facebook.com/username 5 false
+
+# With headless mode
+python scrape_facebook_simple.py https://www.facebook.com/username 10 true
+
+# Analyze sentiment
+python -m sentiment.main_analyzer --input output/facebook/raw/posts_TIMESTAMP.json --output output/facebook/sentiment/posts_TIMESTAMP_sentiment.json
+```
+
+**Status**: ✅ **WORKING** - Tested March 2, 2026  
+**Features**:
+- ✅ Scrapes posts and videos from Facebook profiles
+- ✅ Supports 2FA authentication (manual completion)
+- ✅ Extracts captions, likes, comments, shares
+- ✅ Comment extraction with author names
+- ✅ Detects post type (post/video/reel) from URL
+- ✅ Anti-detection measures (random user agents, delays)
+
+**Requirements**:
+- Facebook account credentials in `.env`:
+  ```
+  FACEBOOK_USERNAME=your_email@example.com
+  FACEBOOK_PASSWORD=your_password
+  ```
+- Chrome browser installed
+- If 2FA is enabled, you'll have 60 seconds to complete it manually
+
+**Output**: JSON file in `output/facebook/raw/` with posts, comments, and metadata
 
 #### 🎭 Demo Mode (Safe Testing)
 
@@ -309,22 +343,23 @@ Each strategy is tried in order until comments are successfully extracted. If al
 
 ### Working Features
 - ✅ **Demo Mode** - 100% working, generates sample data
-- ✅ **Instagram Scraping** - Simplified fast scraper working (tested Feb 9, 2026)
+- ✅ **Instagram Scraping** - Simplified fast scraper with comments (tested Feb 9, 2026)
+- ✅ **Facebook Scraping** - Simplified scraper with posts, videos, comments (tested Mar 2, 2026)
 - ✅ **Sentiment Analysis** - VADER and TextBlob models working
 - ✅ **Results Viewer** - Beautiful formatted output
 - ✅ **Database Integration** - PostgreSQL storage working
 - ✅ **Testing Suite** - 305 tests passing (100% pass rate)
+- ✅ **Flask Dashboard** - Analytics dashboard with 5 pages and 6 API endpoints
 
 ### In Development
 - 🔄 Twitter scraping (basic implementation done)
-- 🔄 Facebook scraping (basic implementation done)
 - 🔄 n8n workflow automation
-- 🔄 Full Instagram data extraction (UI changes make this challenging)
+- 🔄 Grafana integration for advanced analytics
 
 ### Known Limitations
-- ⚠️ Instagram simplified scraper extracts minimal data (post IDs and URLs)
-- ⚠️ Full caption/likes/comments extraction affected by Instagram UI changes
-- ⚠️ Twitter and Facebook scrapers need real-world testing
+- ⚠️ Facebook scraper may not find post links if profile structure is unusual
+- ⚠️ Twitter scraper needs real-world testing
+- ⚠️ Instagram/Facebook UI changes may affect scraping reliability
 
 **See [docs/REAL_SCRAPING_COMPLETION.md](docs/REAL_SCRAPING_COMPLETION.md) for detailed status**
 
