@@ -164,8 +164,19 @@ Examples:
         # Other settings from environment
         config['rate_limit'] = self.config.rate_limit
         config['timeout'] = self.config.timeout
-        config['username'] = self.config.username
-        config['password'] = self.config.password
+        
+        # Get credentials based on the selected platform (not from initial config)
+        # If platform was overridden via CLI, we need to get the right credentials
+        import os
+        from dotenv import load_dotenv
+        load_dotenv()
+        
+        platform = config['platform']
+        platform_upper = platform.upper()
+        
+        # Try platform-specific credentials first
+        config['username'] = os.getenv(f'{platform_upper}_USERNAME') or os.getenv('SCRAPER_USERNAME')
+        config['password'] = os.getenv(f'{platform_upper}_PASSWORD') or os.getenv('SCRAPER_PASSWORD')
         
         return config
     

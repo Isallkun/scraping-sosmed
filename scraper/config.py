@@ -70,6 +70,14 @@ class ScraperConfig:
         # Load credentials (optional, may not be needed for all platforms)
         self._config['SCRAPER_USERNAME'] = os.getenv('SCRAPER_USERNAME')
         self._config['SCRAPER_PASSWORD'] = os.getenv('SCRAPER_PASSWORD')
+        
+        # Load platform-specific credentials
+        self._config['INSTAGRAM_USERNAME'] = os.getenv('INSTAGRAM_USERNAME')
+        self._config['INSTAGRAM_PASSWORD'] = os.getenv('INSTAGRAM_PASSWORD')
+        self._config['TWITTER_USERNAME'] = os.getenv('TWITTER_USERNAME')
+        self._config['TWITTER_PASSWORD'] = os.getenv('TWITTER_PASSWORD')
+        self._config['FACEBOOK_USERNAME'] = os.getenv('FACEBOOK_USERNAME')
+        self._config['FACEBOOK_PASSWORD'] = os.getenv('FACEBOOK_PASSWORD')
     
     def _validate_configuration(self):
         """
@@ -168,12 +176,32 @@ class ScraperConfig:
     
     @property
     def username(self) -> Optional[str]:
-        """Get the configured username."""
+        """Get the configured username based on platform."""
+        platform = self.platform
+        
+        # Try platform-specific username first
+        platform_username_key = f'{platform.upper()}_USERNAME'
+        platform_username = self._config.get(platform_username_key)
+        
+        if platform_username:
+            return platform_username
+        
+        # Fallback to generic SCRAPER_USERNAME
         return self._config.get('SCRAPER_USERNAME')
     
     @property
     def password(self) -> Optional[str]:
-        """Get the configured password."""
+        """Get the configured password based on platform."""
+        platform = self.platform
+        
+        # Try platform-specific password first
+        platform_password_key = f'{platform.upper()}_PASSWORD'
+        platform_password = self._config.get(platform_password_key)
+        
+        if platform_password:
+            return platform_password
+        
+        # Fallback to generic SCRAPER_PASSWORD
         return self._config.get('SCRAPER_PASSWORD')
     
     @property

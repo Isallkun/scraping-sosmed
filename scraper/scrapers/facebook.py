@@ -167,6 +167,35 @@ class FacebookScraper(BaseScraper):
                 
                 raise AuthenticationError("Login failed - credentials may be incorrect")
             
+            # Check for 2FA/verification page
+            if 'two_step_verification' in current_url or 'checkpoint' in current_url:
+                self.logger.warning(f"Two-factor authentication required: {current_url}")
+                self.logger.warning("Please complete 2FA verification manually in the browser")
+                self.logger.warning("Waiting 60 seconds for manual verification...")
+                
+                # Wait for user to complete 2FA manually
+                for i in range(60):
+                    time.sleep(1)
+                    current_url = self.driver.current_url
+                    
+                    # Check if 2FA completed
+                    if 'two_step_verification' not in current_url and 'checkpoint' not in current_url:
+                        if 'login' not in current_url:
+                            self.logger.info(f"2FA verification completed - redirected to {current_url}")
+                            return True
+                    
+                    if i % 10 == 0:
+                        self.logger.info(f"Still waiting for 2FA... ({60-i}s remaining)")
+                
+                # Check final URL after timeout
+                current_url = self.driver.current_url
+                if 'login' not in current_url and 'two_step_verification' not in current_url:
+                    self.logger.info(f"Authentication successful after 2FA - on page: {current_url}")
+                    return True
+                else:
+                    self.logger.error("2FA verification timeout or failed")
+                    raise AuthenticationError("Two-factor authentication required but not completed")
+            
             # Check if we reached the home feed (successful login)
             if current_url == self.BASE_URL or current_url == f"{self.BASE_URL}/" or 'home' in current_url:
                 self.logger.info(f"Authentication successful - redirected to {current_url}")
